@@ -2,7 +2,7 @@
 
 Control notification position on macOS.
 
-**Note: I can't run Hackintosh anymore, so development is in a feature freeze. Users say the app works on macOS 26 just fine. If the app breaks, I can borrow my friends' Mac and fix it. Rest assured, new features will come when I can afford my own Macbook!**
+**Note: macOS 26 users can use [@sk0gen](https://github.com/sk0gen)'s build for the time being, [download here](https://github.com/sk0gen/PingPlace/releases/download/v1.3.2/PingPlace.app.tar.gz)!**
 
 ![image](https://github.com/user-attachments/assets/469b318f-eba5-464f-87be-74d3decaa8a2)
 
