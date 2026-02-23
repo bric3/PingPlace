@@ -40,6 +40,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var widgetMonitorTimer: Timer?
     private var lastWidgetWindowCount: Int = 0
     private var pollingEndTime: Date?
+    private var screenParametersObserver: NSObjectProtocol?
 
     private var currentPosition: NotificationPosition = {
         guard let rawValue: String = UserDefaults.standard.string(forKey: "notificationPosition"),
@@ -58,6 +59,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_: Notification) {
         checkAccessibilityPermissions()
         setupObserver()
+        setupScreenChangeObserver()
         if !isMenuBarIconHidden {
             setupStatusItem()
         }
@@ -401,6 +403,60 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate {
         widgetMonitorTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
             self.checkForWidgetChanges()
         }
+    }
+
+    private func setupScreenChangeObserver() {
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleScreenConfigurationChanged()
+        }
+    }
+
+    private func handleScreenConfigurationChanged() {
+        debugLog("Screen parameters changed - recomputing notification placement")
+        recenterNotificationsAfterScreenChange()
+        moveAllNotifications()
+    }
+
+    private func recenterNotificationsAfterScreenChange() {
+        guard let initialPosition: CGPoint = cachedInitialPosition else {
+            clearCachedNotificationGeometry()
+            return
+        }
+
+        guard let pid: pid_t = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == notificationCenterBundleID
+        })?.processIdentifier else {
+            clearCachedNotificationGeometry()
+            return
+        }
+
+        let app: AXUIElement = AXUIElementCreateApplication(pid)
+        var windowsRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let windows: [AXUIElement] = windowsRef as? [AXUIElement] else {
+            clearCachedNotificationGeometry()
+            return
+        }
+
+        for window in windows {
+            if let identifier: String = getWindowIdentifier(window), identifier.hasPrefix("widget") {
+                continue
+            }
+            setPosition(window, x: initialPosition.x, y: initialPosition.y)
+        }
+
+        clearCachedNotificationGeometry()
+    }
+
+    private func clearCachedNotificationGeometry() {
+        cachedInitialPosition = nil
+        cachedInitialWindowSize = nil
+        cachedInitialNotifSize = nil
+        cachedInitialPadding = nil
     }
 
     private func getWindowIdentifier(_ element: AXUIElement) -> String? {
