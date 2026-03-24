@@ -7,6 +7,7 @@ struct ScreenDescriptor: Equatable {
 }
 
 enum NotificationMoveDecision: Equatable {
+    case skipPanelOpen
     case skipWidget
     case skipFocused
     case move

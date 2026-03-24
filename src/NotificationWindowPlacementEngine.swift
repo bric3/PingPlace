@@ -3,6 +3,8 @@ import CoreGraphics
 struct NotificationWindowSnapshot {
     let identifier: String?
     let focused: Bool
+    let isNotificationCenterPanelOpen: Bool
+    let notificationSubrole: String?
     let windowSize: CGSize
     let notificationSize: CGSize
     let notificationPosition: CGPoint
@@ -50,7 +52,9 @@ final class NotificationWindowPlacementEngine {
     ) -> NotificationWindowMoveEvaluation {
         let decision = NotificationMovePolicy.moveDecision(
             identifier: snapshot.identifier,
-            focused: snapshot.focused
+            focused: snapshot.focused,
+            isNotificationCenterPanelOpen: snapshot.isNotificationCenterPanelOpen,
+            notificationSubrole: snapshot.notificationSubrole
         )
         guard decision == .move else {
             return .skip(decision)

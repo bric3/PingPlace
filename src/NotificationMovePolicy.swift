@@ -1,5 +1,14 @@
 enum NotificationMovePolicy {
-    static func moveDecision(identifier: String?, focused: Bool) -> NotificationMoveDecision {
+    static func moveDecision(
+        identifier: String?,
+        focused: Bool,
+        isNotificationCenterPanelOpen: Bool,
+        notificationSubrole: String?
+    ) -> NotificationMoveDecision {
+        if isNotificationCenterPanelOpen,
+           shouldSkipForPanelOpen(notificationSubrole: notificationSubrole) {
+            return .skipPanelOpen
+        }
         if let identifier, identifier.hasPrefix("widget") {
             return .skipWidget
         }
@@ -14,5 +23,18 @@ enum NotificationMovePolicy {
             return false
         }
         return cachedWindowIdentifier != currentWindowIdentifier
+    }
+
+    private static func shouldSkipForPanelOpen(notificationSubrole: String?) -> Bool {
+        switch notificationSubrole {
+        case "AXNotificationCenterAlert":
+            return false
+        case "AXNotificationCenterBanner",
+             "AXNotificationCenterNotification",
+             "AXNotificationCenterBannerWindow":
+            return true
+        default:
+            return true
+        }
     }
 }

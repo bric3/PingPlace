@@ -84,7 +84,7 @@ final class NotificationController {
                 pollingEndTime = Date().addingTimeInterval(6.5)
             }
             if delegate.notificationPosition() != .topRight {
-                _ = delegate.moveAllNotifications(reason: "widgetMonitorTimer")
+                triggerRecoveryReposition(reason: "notificationCenterClosed")
             }
         }
 

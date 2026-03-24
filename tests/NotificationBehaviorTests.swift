@@ -35,6 +35,12 @@ private let laptopSecondaryScreen = ScreenDescriptor(
     isMain: false
 )
 
+private let singleLaptopMainScreen = ScreenDescriptor(
+    frame: CGRect(x: 0, y: 0, width: 1800, height: 1169),
+    visibleFrame: CGRect(x: 0, y: 0, width: 1800, height: 1129),
+    isMain: true
+)
+
 private let dualScreenLayout = [externalMainScreen, laptopSecondaryScreen]
 
 private let pointInsideLaptopScreen = CGPoint(x: 1440, y: -1100)
@@ -159,19 +165,90 @@ private func testDeadCenterPlacement() throws {
     try assertEqual(result.y, 460, "dead-center y")
 }
 
+private func testPlacementForAllNotificationPositions() throws {
+    let windowSize = CGSize(width: 1920, height: 1080)
+    let notificationSize = CGSize(width: 320, height: 80)
+    let notificationPosition = CGPoint(x: 1000, y: 0)
+    let padding: CGFloat = 80
+    let dockSize: CGFloat = 40
+    let paddingAboveDock: CGFloat = 30
+
+    let expectations: [(NotificationPosition, CGFloat, CGFloat)] = [
+        (.topLeft, -920, 0),
+        (.topMiddle, -200, 0),
+        (.topRight, 0, 0),
+        (.middleLeft, -920, 460),
+        (.deadCenter, -200, 460),
+        (.middleRight, 0, 460),
+        (.bottomLeft, -920, 930),
+        (.bottomMiddle, -200, 930),
+        (.bottomRight, 0, 930),
+    ]
+
+    for (position, expectedX, expectedY) in expectations {
+        let result = NotificationGeometry.newPosition(
+            currentPosition: position,
+            windowSize: windowSize,
+            notifSize: notificationSize,
+            position: notificationPosition,
+            padding: padding,
+            dockSize: dockSize,
+            paddingAboveDock: paddingAboveDock
+        )
+
+        try assertEqual(result.x, expectedX, "\(position.displayName) x")
+        try assertEqual(result.y, expectedY, "\(position.displayName) y")
+    }
+}
+
 private func testMoveDecisionSkipsWidgetWindows() throws {
-    let result = NotificationMovePolicy.moveDecision(identifier: "widget-local-123", focused: false)
+    let result = NotificationMovePolicy.moveDecision(
+        identifier: "widget-local-123",
+        focused: false,
+        isNotificationCenterPanelOpen: false,
+        notificationSubrole: "AXNotificationCenterBanner"
+    )
     try assertEqual(result, .skipWidget, "widget windows should be skipped")
 }
 
 private func testMoveDecisionSkipsFocusedWindows() throws {
-    let result = NotificationMovePolicy.moveDecision(identifier: "notification-banner", focused: true)
+    let result = NotificationMovePolicy.moveDecision(
+        identifier: "notification-banner",
+        focused: true,
+        isNotificationCenterPanelOpen: false,
+        notificationSubrole: "AXNotificationCenterBanner"
+    )
     try assertEqual(result, .skipFocused, "focused windows should be skipped")
 }
 
 private func testMoveDecisionAllowsRegularBanners() throws {
-    let result = NotificationMovePolicy.moveDecision(identifier: "notification-banner", focused: false)
+    let result = NotificationMovePolicy.moveDecision(
+        identifier: "notification-banner",
+        focused: false,
+        isNotificationCenterPanelOpen: false,
+        notificationSubrole: "AXNotificationCenterBanner"
+    )
     try assertEqual(result, .move, "regular banners should be moved")
+}
+
+private func testMoveDecisionSkipsWhenNotificationCenterPanelIsOpen() throws {
+    let result = NotificationMovePolicy.moveDecision(
+        identifier: "notification-banner",
+        focused: false,
+        isNotificationCenterPanelOpen: true,
+        notificationSubrole: "AXNotificationCenterBanner"
+    )
+    try assertEqual(result, .skipPanelOpen, "panel-open state should block moves")
+}
+
+private func testMoveDecisionAllowsAlertsWhilePanelIsOpen() throws {
+    let result = NotificationMovePolicy.moveDecision(
+        identifier: "notification-alert",
+        focused: false,
+        isNotificationCenterPanelOpen: true,
+        notificationSubrole: "AXNotificationCenterAlert"
+    )
+    try assertEqual(result, .move, "alert windows should still move while panel-open heuristics are active")
 }
 
 private func testCacheResetWhenWindowIdentifierChanges() throws {
@@ -340,6 +417,7 @@ private func testControllerScreenChangeSchedulesRetryWhenNoMoveOccurs() throws {
 private func testControllerWidgetCloseTriggersMoveWhenNotTopRight() throws {
     let delegate = TestControllerDelegate()
     delegate.currentPosition = .deadCenter
+    delegate.moveResults = [true]
     let scheduler = TestScheduler()
     let controller = NotificationController(
         delegate: delegate,
@@ -353,7 +431,35 @@ private func testControllerWidgetCloseTriggersMoveWhenNotTopRight() throws {
     delegate.hasNCUI = false
     controller.handleWidgetMonitorTick()
 
-    try assertEqual(delegate.moveReasons, ["widgetMonitorTimer"], "panel close should trigger move when position is not top-right")
+    try assertEqual(delegate.moveReasons, ["notificationCenterClosed"], "panel close should trigger recovery move when position is not top-right")
+}
+
+private func testControllerWidgetCloseSchedulesRetryWhenNoMoveOccurs() throws {
+    let delegate = TestControllerDelegate()
+    delegate.currentPosition = .deadCenter
+    delegate.moveResults = [false, true]
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 10
+    )
+
+    delegate.hasNCUI = true
+    controller.handleWidgetMonitorTick()
+    delegate.hasNCUI = false
+    controller.handleWidgetMonitorTick()
+
+    try assertEqual(delegate.moveReasons, ["notificationCenterClosed"], "panel close should try immediate recovery move")
+    try assertEqual(scheduler.scheduledActions.count, 1, "panel close should schedule retry when immediate move finds nothing")
+
+    scheduler.runNext()
+    try assertEqual(
+        delegate.moveReasons,
+        ["notificationCenterClosed", "notificationCenterClosed-retry1"],
+        "panel close retry should use suffixed reason"
+    )
 }
 
 private func testControllerWidgetCloseDoesNotTriggerMoveWhenTopRight() throws {
@@ -426,6 +532,8 @@ private func testPlacementEngineInitializesCacheAndComputesMovePlan() throws {
     let snapshot = NotificationWindowSnapshot(
         identifier: "banner-1",
         focused: false,
+        isNotificationCenterPanelOpen: false,
+        notificationSubrole: "AXNotificationCenterBanner",
         windowSize: CGSize(width: 3360, height: 1890),
         notificationSize: CGSize(width: 344, height: 73),
         notificationPosition: CGPoint(x: 3376, y: 46)
@@ -452,6 +560,8 @@ private func testPlacementEngineResetsCacheWhenIdentifierChanges() throws {
         snapshot: NotificationWindowSnapshot(
             identifier: "banner-1",
             focused: false,
+            isNotificationCenterPanelOpen: false,
+            notificationSubrole: "AXNotificationCenterBanner",
             windowSize: CGSize(width: 3360, height: 1890),
             notificationSize: CGSize(width: 344, height: 73),
             notificationPosition: CGPoint(x: 3376, y: 46)
@@ -464,6 +574,8 @@ private func testPlacementEngineResetsCacheWhenIdentifierChanges() throws {
         snapshot: NotificationWindowSnapshot(
             identifier: "banner-2",
             focused: false,
+            isNotificationCenterPanelOpen: false,
+            notificationSubrole: "AXNotificationCenterBanner",
             windowSize: CGSize(width: 3360, height: 1890),
             notificationSize: CGSize(width: 344, height: 73),
             notificationPosition: CGPoint(x: 3376, y: 46)
@@ -486,6 +598,8 @@ private func testPlacementEngineRequestsResetToCachedPosition() throws {
         snapshot: NotificationWindowSnapshot(
             identifier: "banner-1",
             focused: false,
+            isNotificationCenterPanelOpen: false,
+            notificationSubrole: "AXNotificationCenterBanner",
             windowSize: CGSize(width: 3360, height: 1890),
             notificationSize: CGSize(width: 344, height: 73),
             notificationPosition: CGPoint(x: 3000, y: 46)
@@ -498,6 +612,8 @@ private func testPlacementEngineRequestsResetToCachedPosition() throws {
         snapshot: NotificationWindowSnapshot(
             identifier: "banner-1",
             focused: false,
+            isNotificationCenterPanelOpen: false,
+            notificationSubrole: "AXNotificationCenterBanner",
             windowSize: CGSize(width: 3360, height: 1890),
             notificationSize: CGSize(width: 344, height: 73),
             notificationPosition: CGPoint(x: 3205, y: 157)
@@ -519,6 +635,8 @@ private func testPlacementEngineSkipsFocusedWindow() throws {
         snapshot: NotificationWindowSnapshot(
             identifier: "banner-1",
             focused: true,
+            isNotificationCenterPanelOpen: false,
+            notificationSubrole: "AXNotificationCenterBanner",
             windowSize: CGSize(width: 3360, height: 1890),
             notificationSize: CGSize(width: 344, height: 73),
             notificationPosition: CGPoint(x: 3376, y: 46)
@@ -540,6 +658,8 @@ private func testPlacementEngineSkipsWidgetWindow() throws {
         snapshot: NotificationWindowSnapshot(
             identifier: "widget-local-123",
             focused: false,
+            isNotificationCenterPanelOpen: false,
+            notificationSubrole: "AXNotificationCenterBanner",
             windowSize: CGSize(width: 3360, height: 1890),
             notificationSize: CGSize(width: 344, height: 73),
             notificationPosition: CGPoint(x: 3376, y: 46)
@@ -561,6 +681,8 @@ private func testPlacementEngineClearCacheRemovesCachedState() throws {
         snapshot: NotificationWindowSnapshot(
             identifier: "banner-1",
             focused: false,
+            isNotificationCenterPanelOpen: false,
+            notificationSubrole: "AXNotificationCenterBanner",
             windowSize: CGSize(width: 3360, height: 1890),
             notificationSize: CGSize(width: 344, height: 73),
             notificationPosition: CGPoint(x: 3376, y: 46)
@@ -572,6 +694,75 @@ private func testPlacementEngineClearCacheRemovesCachedState() throws {
     engine.clearCache()
 
     try assertEqual(engine.cache?.windowIdentifier, nil, "placement engine cache should be empty after clear")
+}
+
+private func testPlacementEngineSkipsWhenPanelIsOpen() throws {
+    let engine = NotificationWindowPlacementEngine(paddingAboveDock: 30)
+    let evaluation = engine.evaluateMove(
+        snapshot: NotificationWindowSnapshot(
+            identifier: "banner-1",
+            focused: false,
+            isNotificationCenterPanelOpen: true,
+            notificationSubrole: "AXNotificationCenterBanner",
+            windowSize: CGSize(width: 1800, height: 1169),
+            notificationSize: CGSize(width: 344, height: 73),
+            notificationPosition: CGPoint(x: 2371, y: 2056)
+        ),
+        currentPosition: .deadCenter,
+        screens: dualScreenLayout
+    )
+
+    guard case let .skip(decision) = evaluation else {
+        throw TestFailure.assertionFailed("placement engine should skip when panel is open")
+    }
+
+    try assertEqual(decision, .skipPanelOpen, "placement engine panel-open skip decision")
+}
+
+private func testPlacementEngineAllowsAlertsWhenPanelIsOpen() throws {
+    let engine = NotificationWindowPlacementEngine(paddingAboveDock: 30)
+    let evaluation = engine.evaluateMove(
+        snapshot: NotificationWindowSnapshot(
+            identifier: "alert-1",
+            focused: false,
+            isNotificationCenterPanelOpen: true,
+            notificationSubrole: "AXNotificationCenterAlert",
+            windowSize: CGSize(width: 1800, height: 1169),
+            notificationSize: CGSize(width: 344, height: 57),
+            notificationPosition: CGPoint(x: 1440, y: 55)
+        ),
+        currentPosition: .deadCenter,
+        screens: [laptopSecondaryScreen]
+    )
+
+    guard case .move = evaluation else {
+        throw TestFailure.assertionFailed("placement engine should still move alerts while panel-open heuristics are active")
+    }
+}
+
+private func testPlacementEngineAllowsWakeAlertOnSingleMainScreenEvenWhenPanelOpenHeuristicIsActive() throws {
+    let engine = NotificationWindowPlacementEngine(paddingAboveDock: 30)
+    let evaluation = engine.evaluateMove(
+        snapshot: NotificationWindowSnapshot(
+            identifier: "wake-alert-1",
+            focused: false,
+            isNotificationCenterPanelOpen: true,
+            notificationSubrole: "AXNotificationCenterAlert",
+            windowSize: CGSize(width: 1800, height: 1169),
+            notificationSize: CGSize(width: 344, height: 57),
+            notificationPosition: CGPoint(x: 1440, y: 55)
+        ),
+        currentPosition: .deadCenter,
+        screens: [singleLaptopMainScreen]
+    )
+
+    guard case let .move(plan) = evaluation else {
+        throw TestFailure.assertionFailed("wake alert on a single main screen should still move even when panel-open heuristics are active")
+    }
+
+    try assertEqual(plan.referenceScreen?.frame, singleLaptopMainScreen.frame, "wake alert should use the single laptop screen as reference")
+    try assertEqual(plan.targetPosition.x, -712, "wake alert target x")
+    try assertEqual(plan.targetPosition.y, 516, "wake alert target y")
 }
 
 private func testResolveScreenPrefersPositionMatch() throws {
@@ -621,9 +812,12 @@ struct NotificationBehaviorTestRunner {
             ("initial position in bounds", testInitialPositionInBounds),
             ("initial position overflow", testInitialPositionRecomputedWhenOutOfBounds),
             ("dead-center placement", testDeadCenterPlacement),
+            ("placement for all notification positions", testPlacementForAllNotificationPositions),
             ("move decision skips widget windows", testMoveDecisionSkipsWidgetWindows),
             ("move decision skips focused windows", testMoveDecisionSkipsFocusedWindows),
             ("move decision allows regular banners", testMoveDecisionAllowsRegularBanners),
+            ("move decision skips while panel is open", testMoveDecisionSkipsWhenNotificationCenterPanelIsOpen),
+            ("move decision allows alerts while panel is open", testMoveDecisionAllowsAlertsWhilePanelIsOpen),
             ("cache resets when window identifier changes", testCacheResetWhenWindowIdentifierChanges),
             ("cache does not reset without identifiers", testCacheDoesNotResetWithoutIdentifiers),
             ("notification center detects open transition", testNotificationCenterStateChangeDetectsOpen),
@@ -638,6 +832,7 @@ struct NotificationBehaviorTestRunner {
             ("controller wake clears cache and moves", testControllerWakeClearsCacheAndTriggersMove),
             ("controller screen change schedules retry", testControllerScreenChangeSchedulesRetryWhenNoMoveOccurs),
             ("controller widget close triggers move", testControllerWidgetCloseTriggersMoveWhenNotTopRight),
+            ("controller widget close schedules retry", testControllerWidgetCloseSchedulesRetryWhenNoMoveOccurs),
             ("controller widget close skips top-right", testControllerWidgetCloseDoesNotTriggerMoveWhenTopRight),
             ("controller invalidate cancels retry", testControllerInvalidateCancelsScheduledRetry),
             ("controller stops retrying at limit", testControllerStopsRetryingAfterAttemptLimit),
@@ -647,6 +842,9 @@ struct NotificationBehaviorTestRunner {
             ("placement engine skips focused window", testPlacementEngineSkipsFocusedWindow),
             ("placement engine skips widget window", testPlacementEngineSkipsWidgetWindow),
             ("placement engine clear cache removes state", testPlacementEngineClearCacheRemovesCachedState),
+            ("placement engine skips while panel is open", testPlacementEngineSkipsWhenPanelIsOpen),
+            ("placement engine allows alerts while panel is open", testPlacementEngineAllowsAlertsWhenPanelIsOpen),
+            ("placement engine allows wake alerts on single main screen while panel-open heuristic is active", testPlacementEngineAllowsWakeAlertOnSingleMainScreenEvenWhenPanelOpenHeuristicIsActive),
             ("resolve screen prefers position match", testResolveScreenPrefersPositionMatch),
             ("resolve screen falls back to window size", testResolveScreenFallsBackToWindowSize),
             ("resolve screen falls back to main screen", testResolveScreenFallsBackToMainScreen),
