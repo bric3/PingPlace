@@ -63,6 +63,14 @@ final class NotificationController {
         triggerRecoveryReposition(reason: "didChangeScreenParametersNotification")
     }
 
+    func handleSessionDidBecomeActive() {
+        guard let delegate else { return }
+        delegate.debugLog("User session became active. \(delegate.screenTopologySummary())")
+        delegate.clearCachedNotificationGeometry()
+        delegate.debugLog("Recomputing notification placement after session activation. \(delegate.screenTopologySummary())")
+        triggerRecoveryReposition(reason: "sessionDidBecomeActiveNotification")
+    }
+
     func handleWidgetMonitorTick() {
         guard let delegate else { return }
 

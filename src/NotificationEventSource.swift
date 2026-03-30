@@ -5,6 +5,7 @@ protocol NotificationEventHandler: AnyObject {
     func notificationCenterWindowCreated(_ element: AXUIElement)
     func notificationCenterStateMonitorTick()
     func screenParametersChanged()
+    func sessionDidBecomeActive()
     func systemWillSleep()
     func systemDidWake()
 }
@@ -17,6 +18,7 @@ final class NotificationEventSource {
     private var axObserver: AXObserver?
     private var widgetMonitorTimer: Timer?
     private var screenParametersObserver: NSObjectProtocol?
+    private var sessionDidBecomeActiveObserver: NSObjectProtocol?
     private var willSleepObserver: NSObjectProtocol?
     private var didWakeObserver: NSObjectProtocol?
 
@@ -38,6 +40,7 @@ final class NotificationEventSource {
         setupAXObserver()
         setupWidgetMonitor()
         setupScreenChangeObserver()
+        setupSessionActivityObservers()
         setupSleepWakeObservers()
     }
 
@@ -51,6 +54,10 @@ final class NotificationEventSource {
         }
 
         let workspaceNotificationCenter = NSWorkspace.shared.notificationCenter
+        if let sessionDidBecomeActiveObserver {
+            workspaceNotificationCenter.removeObserver(sessionDidBecomeActiveObserver)
+            self.sessionDidBecomeActiveObserver = nil
+        }
         if let willSleepObserver {
             workspaceNotificationCenter.removeObserver(willSleepObserver)
             self.willSleepObserver = nil
@@ -117,6 +124,17 @@ final class NotificationEventSource {
             queue: .main
         ) { [weak self] _ in
             self?.handler?.systemDidWake()
+        }
+    }
+
+    private func setupSessionActivityObservers() {
+        let workspaceNotificationCenter = NSWorkspace.shared.notificationCenter
+        sessionDidBecomeActiveObserver = workspaceNotificationCenter.addObserver(
+            forName: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handler?.sessionDidBecomeActive()
         }
     }
 

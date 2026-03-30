@@ -85,7 +85,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         delegate: self,
         scheduler: NotificationTimerScheduler(),
         recoveryRetryInterval: 0.5,
-        recoveryRetryLimit: 10
+        recoveryRetryLimit: 20
     )
     private lazy var eventSource = NotificationEventSource(
         notificationCenterBundleID: notificationCenterBundleID,
@@ -109,7 +109,8 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         if let debugLogPath = fileDebugLogger?.path {
             debugLog("Debug mode enabled. Writing trace file to: \(debugLogPath)")
         }
-        debugLog("Application launched. \(screenTopologySummary())")
+        debugLog("Application launched. \(buildIdentitySummary())")
+        debugLog(screenTopologySummary())
         checkAccessibilityPermissions()
         eventSource.start()
         if !isMenuBarIconHidden {
@@ -511,6 +512,12 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         }
     }
 
+    func sessionDidBecomeActive() {
+        DispatchQueue.main.async {
+            self.controller.handleSessionDidBecomeActive()
+        }
+    }
+
     func systemWillSleep() {
         debugLog("System will sleep. \(screenTopologySummary())")
     }
@@ -678,6 +685,12 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         let w = Int(rect.size.width.rounded())
         let h = Int(rect.size.height.rounded())
         return "\(x),\(y),\(w)x\(h)"
+    }
+
+    private func buildIdentitySummary() -> String {
+        let shortVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "N/A"
+        let bundleVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "N/A"
+        return "build={version=\(shortVersion),bundle=\(bundleVersion),commit=\(GeneratedBuildInfo.gitCommit),dirty=\(GeneratedBuildInfo.gitDirtyState),builtAt=\(GeneratedBuildInfo.buildTimestamp),sourceFingerprint=\(GeneratedBuildInfo.sourceFingerprint)}"
     }
 
 }

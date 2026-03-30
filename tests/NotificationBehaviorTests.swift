@@ -414,6 +414,47 @@ private func testControllerScreenChangeSchedulesRetryWhenNoMoveOccurs() throws {
     )
 }
 
+private func testControllerSessionActivationClearsCacheAndTriggersMove() throws {
+    let delegate = TestControllerDelegate()
+    delegate.moveResults = [true]
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 10
+    )
+
+    controller.handleSessionDidBecomeActive()
+
+    try assertEqual(delegate.clearCacheCallCount, 1, "session activation should clear cached geometry")
+    try assertEqual(delegate.moveReasons, ["sessionDidBecomeActiveNotification"], "session activation should trigger immediate move")
+    try assertEqual(scheduler.scheduledActions.count, 0, "session activation should not schedule retry after successful move")
+}
+
+private func testControllerSessionActivationSchedulesRetryWhenNoMoveOccurs() throws {
+    let delegate = TestControllerDelegate()
+    delegate.moveResults = [false, true]
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 10
+    )
+
+    controller.handleSessionDidBecomeActive()
+    try assertEqual(delegate.moveReasons, ["sessionDidBecomeActiveNotification"], "session activation should try immediate move first")
+    try assertEqual(scheduler.scheduledActions.count, 1, "session activation should schedule retry after failed move")
+
+    scheduler.runNext()
+    try assertEqual(
+        delegate.moveReasons,
+        ["sessionDidBecomeActiveNotification", "sessionDidBecomeActiveNotification-retry1"],
+        "session activation retry should use suffixed reason"
+    )
+}
+
 private func testControllerWidgetCloseTriggersMoveWhenNotTopRight() throws {
     let delegate = TestControllerDelegate()
     delegate.currentPosition = .deadCenter
@@ -525,6 +566,81 @@ private func testControllerStopsRetryingAfterAttemptLimit() throws {
         ],
         "controller should stop scheduling retries after retry limit"
     )
+}
+
+private func testControllerKeepsRetryingLongEnoughForDelayedScreenChangeNotifications() throws {
+    let delegate = TestControllerDelegate()
+    delegate.moveResults = Array(repeating: false, count: 12) + [true]
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 20
+    )
+
+    controller.handleScreenConfigurationChanged()
+
+    for _ in 0..<12 {
+        scheduler.runNext()
+    }
+
+    try assertEqual(
+        delegate.moveReasons.last,
+        "didChangeScreenParametersNotification-retry12",
+        "controller should keep retrying until delayed notifications become available"
+    )
+    try assertEqual(scheduler.scheduledActions.count, 0, "controller should stop retrying after the delayed successful move")
+}
+
+private func testControllerKeepsRetryingLongEnoughForDelayedWakeNotifications() throws {
+    let delegate = TestControllerDelegate()
+    delegate.moveResults = Array(repeating: false, count: 12) + [true]
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 20
+    )
+
+    controller.handleWake()
+
+    for _ in 0..<12 {
+        scheduler.runNext()
+    }
+
+    try assertEqual(
+        delegate.moveReasons.last,
+        "didWakeNotification-retry12",
+        "controller should keep retrying after wake while AX only exposes placeholder windows"
+    )
+    try assertEqual(scheduler.scheduledActions.count, 0, "controller should stop retrying after the delayed successful wake move")
+}
+
+private func testControllerKeepsRetryingLongEnoughForDelayedSessionActivationNotifications() throws {
+    let delegate = TestControllerDelegate()
+    delegate.moveResults = Array(repeating: false, count: 12) + [true]
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 20
+    )
+
+    controller.handleSessionDidBecomeActive()
+
+    for _ in 0..<12 {
+        scheduler.runNext()
+    }
+
+    try assertEqual(
+        delegate.moveReasons.last,
+        "sessionDidBecomeActiveNotification-retry12",
+        "controller should keep retrying after session activation while login-screen notifications are still placeholder-only"
+    )
+    try assertEqual(scheduler.scheduledActions.count, 0, "controller should stop retrying after the delayed successful session-activation move")
 }
 
 private func testPlacementEngineInitializesCacheAndComputesMovePlan() throws {
@@ -831,11 +947,16 @@ struct NotificationBehaviorTestRunner {
             ("iterative traversal returns nil when no match exists", testFirstMatchingNodeReturnsNilWhenNoMatchExists),
             ("controller wake clears cache and moves", testControllerWakeClearsCacheAndTriggersMove),
             ("controller screen change schedules retry", testControllerScreenChangeSchedulesRetryWhenNoMoveOccurs),
+            ("controller session activation clears cache and moves", testControllerSessionActivationClearsCacheAndTriggersMove),
+            ("controller session activation schedules retry", testControllerSessionActivationSchedulesRetryWhenNoMoveOccurs),
             ("controller widget close triggers move", testControllerWidgetCloseTriggersMoveWhenNotTopRight),
             ("controller widget close schedules retry", testControllerWidgetCloseSchedulesRetryWhenNoMoveOccurs),
             ("controller widget close skips top-right", testControllerWidgetCloseDoesNotTriggerMoveWhenTopRight),
             ("controller invalidate cancels retry", testControllerInvalidateCancelsScheduledRetry),
             ("controller stops retrying at limit", testControllerStopsRetryingAfterAttemptLimit),
+            ("controller keeps retrying for delayed screen change notifications", testControllerKeepsRetryingLongEnoughForDelayedScreenChangeNotifications),
+            ("controller keeps retrying for delayed wake notifications", testControllerKeepsRetryingLongEnoughForDelayedWakeNotifications),
+            ("controller keeps retrying for delayed session activation notifications", testControllerKeepsRetryingLongEnoughForDelayedSessionActivationNotifications),
             ("placement engine initializes cache and computes move plan", testPlacementEngineInitializesCacheAndComputesMovePlan),
             ("placement engine resets cache when identifier changes", testPlacementEngineResetsCacheWhenIdentifierChanges),
             ("placement engine requests reset to cached position", testPlacementEngineRequestsResetToCachedPosition),
