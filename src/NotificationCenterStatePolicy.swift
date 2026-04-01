@@ -1,4 +1,17 @@
 enum NotificationCenterStatePolicy {
+    static func isPanelOpen(
+        signal: NotificationCenterPanelSignal,
+        wasPreviouslyOpen: Bool
+    ) -> Bool {
+        if signal.hasFocusedWindow {
+            return true
+        }
+        if wasPreviouslyOpen, signal.hasWidgetUI {
+            return true
+        }
+        return false
+    }
+
     static func stateChange(
         previousState: Int,
         isOpen: Bool

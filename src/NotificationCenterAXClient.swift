@@ -10,6 +10,7 @@ protocol NotificationCenterAXClient {
     func size(of element: AXUIElement) -> CGSize?
     func setPosition(_ element: AXUIElement, point: CGPoint)
     func firstElement(root: AXUIElement, targetSubroles: [String]) -> AXUIElement?
+    func hasFocusedWindow(pid: pid_t) -> Bool
     func hasWidgetUI(pid: pid_t) -> Bool
     func role(of element: AXUIElement) -> String?
     func subrole(of element: AXUIElement) -> String?
@@ -90,6 +91,15 @@ struct SystemNotificationCenterAXClient: NotificationCenterAXClient {
                 return targetSubroles.contains(subrole)
             }
         )
+    }
+
+    func hasFocusedWindow(pid: pid_t) -> Bool {
+        let axApp = AXUIElementCreateApplication(pid)
+        var focusedWindowRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &focusedWindowRef) == .success else {
+            return false
+        }
+        return focusedWindowRef != nil
     }
 
     func hasWidgetUI(pid: pid_t) -> Bool {

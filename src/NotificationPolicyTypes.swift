@@ -6,6 +6,11 @@ struct ScreenDescriptor: Equatable {
     let isMain: Bool
 }
 
+struct NotificationCenterPanelSignal: Equatable {
+    let hasFocusedWindow: Bool
+    let hasWidgetUI: Bool
+}
+
 enum NotificationMoveDecision: Equatable {
     case skipPanelOpen
     case skipWidget

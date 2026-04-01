@@ -96,7 +96,7 @@ private final class TestScheduler: NotificationScheduler {
 private final class TestControllerDelegate: NotificationControllerDelegate {
     var currentPosition: NotificationPosition = .deadCenter
     var screenSummary = "screens=[test]"
-    var hasNCUI = false
+    var panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
     var moveResults: [Bool] = []
     private(set) var moveReasons: [String] = []
     private(set) var loggedMessages: [String] = []
@@ -126,8 +126,12 @@ private final class TestControllerDelegate: NotificationControllerDelegate {
         return moveResults.removeFirst()
     }
 
+    func notificationCenterPanelSignal() -> NotificationCenterPanelSignal {
+        panelSignal
+    }
+
     func hasNotificationCenterUI() -> Bool {
-        hasNCUI
+        panelSignal.hasFocusedWindow
     }
 }
 
@@ -305,6 +309,37 @@ private func testNotificationCenterStateChangeDetectsNoChange() throws {
     )
 }
 
+private func testPanelOpenSignalUsesFocusedWindowAsPrimarySignal() throws {
+    try assertTrue(
+        NotificationCenterStatePolicy.isPanelOpen(
+            signal: NotificationCenterPanelSignal(hasFocusedWindow: true, hasWidgetUI: false),
+            wasPreviouslyOpen: false
+        ),
+        "focused window should mark the panel as open"
+    )
+}
+
+private func testPanelOpenSignalIgnoresWidgetSignalWhenPreviouslyClosed() throws {
+    try assertEqual(
+        NotificationCenterStatePolicy.isPanelOpen(
+            signal: NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: true),
+            wasPreviouslyOpen: false
+        ),
+        false,
+        "widget-only signal should not reopen the panel from a closed state"
+    )
+}
+
+private func testPanelOpenSignalUsesWidgetSignalOnlyAsOpenContinuity() throws {
+    try assertTrue(
+        NotificationCenterStatePolicy.isPanelOpen(
+            signal: NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: true),
+            wasPreviouslyOpen: true
+        ),
+        "widget signal should only keep the panel open when it was already open"
+    )
+}
+
 private func testRecoveryRetryActionRetriesWhenNoMoveAndAttemptsRemain() throws {
     try assertEqual(
         NotificationCenterStatePolicy.recoveryRetryAction(
@@ -467,9 +502,9 @@ private func testControllerWidgetCloseTriggersMoveWhenNotTopRight() throws {
         recoveryRetryLimit: 10
     )
 
-    delegate.hasNCUI = true
+    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: true, hasWidgetUI: true)
     controller.handleWidgetMonitorTick()
-    delegate.hasNCUI = false
+    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
     controller.handleWidgetMonitorTick()
 
     try assertEqual(delegate.moveReasons, ["notificationCenterClosed"], "panel close should trigger recovery move when position is not top-right")
@@ -487,9 +522,9 @@ private func testControllerWidgetCloseSchedulesRetryWhenNoMoveOccurs() throws {
         recoveryRetryLimit: 10
     )
 
-    delegate.hasNCUI = true
+    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: true, hasWidgetUI: true)
     controller.handleWidgetMonitorTick()
-    delegate.hasNCUI = false
+    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
     controller.handleWidgetMonitorTick()
 
     try assertEqual(delegate.moveReasons, ["notificationCenterClosed"], "panel close should try immediate recovery move")
@@ -514,12 +549,35 @@ private func testControllerWidgetCloseDoesNotTriggerMoveWhenTopRight() throws {
         recoveryRetryLimit: 10
     )
 
-    delegate.hasNCUI = true
+    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: true, hasWidgetUI: true)
     controller.handleWidgetMonitorTick()
-    delegate.hasNCUI = false
+    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
     controller.handleWidgetMonitorTick()
 
     try assertEqual(delegate.moveReasons, [], "panel close should not trigger move when position is top-right")
+}
+
+private func testControllerKeepsPanelOpenWhenFocusDropsButWidgetSignalRemains() throws {
+    let delegate = TestControllerDelegate()
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 10
+    )
+
+    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: true, hasWidgetUI: true)
+    controller.handleWidgetMonitorTick()
+    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: true)
+    controller.handleWidgetMonitorTick()
+
+    try assertEqual(delegate.moveReasons, [], "panel should remain open when widget signal persists after focus drops")
+    try assertEqual(
+        delegate.loggedMessages.filter { $0.contains("Notification Center state changed") }.count,
+        1,
+        "continuity signal should not emit a close transition"
+    )
 }
 
 private func testControllerInvalidateCancelsScheduledRetry() throws {
@@ -939,6 +997,9 @@ struct NotificationBehaviorTestRunner {
             ("notification center detects open transition", testNotificationCenterStateChangeDetectsOpen),
             ("notification center detects close transition", testNotificationCenterStateChangeDetectsClose),
             ("notification center detects unchanged state", testNotificationCenterStateChangeDetectsNoChange),
+            ("panel open signal uses focused window as primary signal", testPanelOpenSignalUsesFocusedWindowAsPrimarySignal),
+            ("panel open signal ignores widget signal when previously closed", testPanelOpenSignalIgnoresWidgetSignalWhenPreviouslyClosed),
+            ("panel open signal uses widget signal only as open continuity", testPanelOpenSignalUsesWidgetSignalOnlyAsOpenContinuity),
             ("recovery retries when attempts remain", testRecoveryRetryActionRetriesWhenNoMoveAndAttemptsRemain),
             ("recovery stops after successful move", testRecoveryRetryActionStopsAfterSuccessfulMove),
             ("recovery stops at attempt limit", testRecoveryRetryActionStopsAtAttemptLimit),
@@ -952,6 +1013,7 @@ struct NotificationBehaviorTestRunner {
             ("controller widget close triggers move", testControllerWidgetCloseTriggersMoveWhenNotTopRight),
             ("controller widget close schedules retry", testControllerWidgetCloseSchedulesRetryWhenNoMoveOccurs),
             ("controller widget close skips top-right", testControllerWidgetCloseDoesNotTriggerMoveWhenTopRight),
+            ("controller keeps panel open when focus drops but widget signal remains", testControllerKeepsPanelOpenWhenFocusDropsButWidgetSignalRemains),
             ("controller invalidate cancels retry", testControllerInvalidateCancelsScheduledRetry),
             ("controller stops retrying at limit", testControllerStopsRetryingAfterAttemptLimit),
             ("controller keeps retrying for delayed screen change notifications", testControllerKeepsRetryingLongEnoughForDelayedScreenChangeNotifications),

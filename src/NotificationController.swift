@@ -7,6 +7,7 @@ protocol NotificationControllerDelegate: AnyObject {
     func clearCachedNotificationGeometry()
     @discardableResult
     func moveAllNotifications(reason: String) -> Bool
+    func notificationCenterPanelSignal() -> NotificationCenterPanelSignal
     func hasNotificationCenterUI() -> Bool
 }
 
@@ -74,7 +75,10 @@ final class NotificationController {
     func handleWidgetMonitorTick() {
         guard let delegate else { return }
 
-        let hasNCUI = delegate.hasNotificationCenterUI()
+        let hasNCUI = NotificationCenterStatePolicy.isPanelOpen(
+            signal: delegate.notificationCenterPanelSignal(),
+            wasPreviouslyOpen: lastWidgetWindowCount > 0
+        )
         let currentNCState = hasNCUI ? 1 : 0
         let stateChange = NotificationCenterStatePolicy.stateChange(
             previousState: lastWidgetWindowCount,
