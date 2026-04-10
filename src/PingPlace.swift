@@ -85,7 +85,9 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         delegate: self,
         scheduler: NotificationTimerScheduler(),
         recoveryRetryInterval: 0.5,
-        recoveryRetryLimit: 20
+        recoveryRetryLimit: 20,
+        placeholderFollowUpInterval: 30,
+        placeholderFollowUpLimit: 60
     )
     private lazy var eventSource = NotificationEventSource(
         notificationCenterBundleID: notificationCenterBundleID,
@@ -268,8 +270,18 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         moveAllNotifications(reason: "changePosition")
     }
 
+    private enum WindowMoveResult {
+        case moved
+        case noBannerContainer
+        case nonMovableCandidate
+    }
+
     func moveNotification(_ window: AXUIElement) -> Bool {
-        guard currentPosition != .topRight else { return false }
+        moveNotificationResult(window) == .moved
+    }
+
+    private func moveNotificationResult(_ window: AXUIElement) -> WindowMoveResult {
+        guard currentPosition != .topRight else { return .nonMovableCandidate }
 
         let windowIdentifier = axClient.windowIdentifier(window)
         let focusedWindow = axClient.isFocused(window)
@@ -309,7 +321,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
                     "bannerFound=\(bannerContainer != nil), " +
                     "banner=\(bannerFingerprint)"
             )
-            return false
+            return .noBannerContainer
         }
         let snapshot = NotificationWindowSnapshot(
             identifier: windowIdentifier,
@@ -333,15 +345,15 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
                     "root=\(windowFingerprint(window: window, identifier: windowIdentifier, focused: focusedWindow, windowSize: resolvedWindowSize, notifPosition: windowPosition)), " +
                     "banner=\(elementFingerprint(resolvedBannerContainer, identifier: bannerIdentifier, focused: bannerFocused, size: resolvedNotifSize, position: resolvedPosition))"
             )
-            return false
+            return .nonMovableCandidate
         case .skip(.skipWidget):
             debugLog("Skipping move - widget window detected: \(windowFingerprint(window: window, identifier: windowIdentifier, focused: focusedWindow))")
-            return false
+            return .nonMovableCandidate
         case .skip(.skipFocused):
             debugLog("Skipping move - focused Notification Center window: \(windowFingerprint(window: window, identifier: windowIdentifier, focused: focusedWindow))")
-            return false
+            return .nonMovableCandidate
         case .skip(.move):
-            return false
+            return .nonMovableCandidate
         case let .move(plan):
             if let identifiers = plan.cacheResetIdentifiers {
                 let previousIdentifier = identifiers.previous ?? "none"
@@ -384,31 +396,46 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
                     "banner=\(elementFingerprint(resolvedBannerContainer, identifier: bannerIdentifier, focused: bannerFocused, size: resolvedNotifSize, position: resolvedPosition)), " +
                     "referenceScreen=\(screenSummary(from: plan.referenceScreen))"
             )
-            return true
+            return .moved
         }
     }
 
     @discardableResult
-    func moveAllNotifications(reason: String = "manual") -> Bool {
+    func moveAllNotifications(reason: String = "manual") -> NotificationScanResult {
         guard let pid = axClient.notificationCenterProcessIdentifier(bundleID: notificationCenterBundleID) else {
             debugLog("Cannot find Notification Center process")
-            return false
+            return .noMovableCandidates
         }
         debugLog("moveAllNotifications triggered (\(reason)). \(screenTopologySummary())")
 
         guard let windows = axClient.notificationWindows(pid: pid) else {
             debugLog("Failed to get notification windows")
-            return false
+            return .noMovableCandidates
         }
         debugLog("Notification Center windows snapshot (\(reason)): count=\(windows.count) [\(windowInventorySummary(windows))]")
 
         var movedAny = false
+        var foundBannerContainer = false
         for (index, window) in windows.enumerated() {
             debugLog("Inspecting Notification Center window \(index + 1)/\(windows.count): \(windowFingerprint(window: window, identifier: axClient.windowIdentifier(window), focused: axClient.isFocused(window), windowSize: axClient.size(of: window), notifPosition: axClient.position(of: window)))")
-            movedAny = moveNotification(window) || movedAny
+            switch moveNotificationResult(window) {
+            case .moved:
+                movedAny = true
+                foundBannerContainer = true
+            case .nonMovableCandidate:
+                foundBannerContainer = true
+            case .noBannerContainer:
+                break
+            }
         }
         debugLog("moveAllNotifications completed (\(reason)): movedAny=\(movedAny), windows=\(windows.count)")
-        return movedAny
+        if movedAny {
+            return .movedNotification
+        }
+        if !foundBannerContainer, !windows.isEmpty {
+            return .placeholderOnly
+        }
+        return .noMovableCandidates
     }
 
     @objc func showAbout() {

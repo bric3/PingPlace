@@ -6,7 +6,7 @@ protocol NotificationControllerDelegate: AnyObject {
     func screenTopologySummary() -> String
     func clearCachedNotificationGeometry()
     @discardableResult
-    func moveAllNotifications(reason: String) -> Bool
+    func moveAllNotifications(reason: String) -> NotificationScanResult
     func notificationCenterPanelSignal() -> NotificationCenterPanelSignal
     func hasNotificationCenterUI() -> Bool
 }
@@ -25,23 +25,32 @@ final class NotificationController {
     private let scheduler: NotificationScheduler
     private let recoveryRetryInterval: TimeInterval
     private let recoveryRetryLimit: Int
+    private let placeholderFollowUpInterval: TimeInterval
+    private let placeholderFollowUpLimit: Int
 
     private var recoveryRetryTask: ScheduledNotificationAction?
+    private var placeholderFollowUpTask: ScheduledNotificationAction?
     private var lastWidgetWindowCount: Int = 0
     private var pollingEndTime: Date?
     private var recoveryRetryAttempt: Int = 0
     private var recoveryRetryReason: String?
+    private var placeholderFollowUpAttempt: Int = 0
+    private var placeholderFollowUpReason: String?
 
     init(
         delegate: NotificationControllerDelegate,
         scheduler: NotificationScheduler,
         recoveryRetryInterval: TimeInterval,
-        recoveryRetryLimit: Int
+        recoveryRetryLimit: Int,
+        placeholderFollowUpInterval: TimeInterval = 30,
+        placeholderFollowUpLimit: Int = 60
     ) {
         self.delegate = delegate
         self.scheduler = scheduler
         self.recoveryRetryInterval = recoveryRetryInterval
         self.recoveryRetryLimit = recoveryRetryLimit
+        self.placeholderFollowUpInterval = placeholderFollowUpInterval
+        self.placeholderFollowUpLimit = placeholderFollowUpLimit
     }
 
     func noteNotificationMoved() {
@@ -106,6 +115,8 @@ final class NotificationController {
     func invalidate() {
         recoveryRetryTask?.cancel()
         recoveryRetryTask = nil
+        placeholderFollowUpTask?.cancel()
+        placeholderFollowUpTask = nil
     }
 
     private func triggerRecoveryReposition(reason: String) {
@@ -114,27 +125,31 @@ final class NotificationController {
         recoveryRetryReason = reason
         recoveryRetryAttempt = 0
         recoveryRetryTask?.cancel()
+        placeholderFollowUpReason = nil
+        placeholderFollowUpAttempt = 0
+        placeholderFollowUpTask?.cancel()
 
-        let didMove = delegate.moveAllNotifications(reason: reason)
-        scheduleRecoveryRetryIfNeeded(reason: reason, didMove: didMove)
+        let scanResult = delegate.moveAllNotifications(reason: reason)
+        scheduleRecoveryRetryIfNeeded(reason: reason, scanResult: scanResult)
     }
 
-    private func scheduleRecoveryRetryIfNeeded(reason: String, didMove: Bool) {
+    private func scheduleRecoveryRetryIfNeeded(reason: String, scanResult: NotificationScanResult) {
         guard let delegate else { return }
 
         let action = NotificationCenterStatePolicy.recoveryRetryAction(
-            didMoveNotification: didMove,
+            scanResult: scanResult,
             attemptNumber: recoveryRetryAttempt,
             maxAttempts: recoveryRetryLimit
         )
 
         switch action {
         case .stop:
-            if !didMove, recoveryRetryAttempt >= recoveryRetryLimit {
+            if scanResult != .movedNotification, recoveryRetryAttempt >= recoveryRetryLimit {
                 delegate.debugLog("Recovery retry window exhausted (\(recoveryRetryAttempt)/\(recoveryRetryLimit)) for \(reason).")
             }
             recoveryRetryTask?.cancel()
             recoveryRetryTask = nil
+            schedulePlaceholderFollowUpIfNeeded(reason: reason, scanResult: scanResult)
         case .retry:
             recoveryRetryAttempt += 1
             delegate.debugLog("Scheduling recovery retry \(recoveryRetryAttempt)/\(recoveryRetryLimit) for \(reason) in \(recoveryRetryInterval)s.")
@@ -142,8 +157,38 @@ final class NotificationController {
             recoveryRetryTask = scheduler.schedule(after: recoveryRetryInterval) { [weak self] in
                 guard let self, let delegate = self.delegate else { return }
                 let activeReason = self.recoveryRetryReason ?? reason
-                let didMoveOnRetry = delegate.moveAllNotifications(reason: "\(activeReason)-retry\(self.recoveryRetryAttempt)")
-                self.scheduleRecoveryRetryIfNeeded(reason: activeReason, didMove: didMoveOnRetry)
+                let scanResultOnRetry = delegate.moveAllNotifications(reason: "\(activeReason)-retry\(self.recoveryRetryAttempt)")
+                self.scheduleRecoveryRetryIfNeeded(reason: activeReason, scanResult: scanResultOnRetry)
+            }
+        }
+    }
+
+    private func schedulePlaceholderFollowUpIfNeeded(reason: String, scanResult: NotificationScanResult) {
+        guard let delegate else { return }
+
+        let action = NotificationCenterStatePolicy.placeholderFollowUpAction(
+            scanResult: scanResult,
+            attemptNumber: placeholderFollowUpAttempt,
+            maxAttempts: placeholderFollowUpLimit
+        )
+
+        switch action {
+        case .stop:
+            if scanResult == .placeholderOnly, placeholderFollowUpAttempt >= placeholderFollowUpLimit {
+                delegate.debugLog("Placeholder follow-up window exhausted (\(placeholderFollowUpAttempt)/\(placeholderFollowUpLimit)) for \(reason).")
+            }
+            placeholderFollowUpTask?.cancel()
+            placeholderFollowUpTask = nil
+        case .retry:
+            placeholderFollowUpAttempt += 1
+            placeholderFollowUpReason = reason
+            delegate.debugLog("Scheduling placeholder follow-up \(placeholderFollowUpAttempt)/\(placeholderFollowUpLimit) for \(reason) in \(placeholderFollowUpInterval)s.")
+            placeholderFollowUpTask?.cancel()
+            placeholderFollowUpTask = scheduler.schedule(after: placeholderFollowUpInterval) { [weak self] in
+                guard let self, let delegate = self.delegate else { return }
+                let activeReason = self.placeholderFollowUpReason ?? reason
+                let scanResultOnFollowUp = delegate.moveAllNotifications(reason: "\(activeReason)-followup\(self.placeholderFollowUpAttempt)")
+                self.schedulePlaceholderFollowUpIfNeeded(reason: activeReason, scanResult: scanResultOnFollowUp)
             }
         }
     }

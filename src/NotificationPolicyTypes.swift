@@ -28,3 +28,9 @@ enum RecoveryRetryAction: Equatable {
     case stop
     case retry
 }
+
+enum NotificationScanResult: Equatable {
+    case movedNotification
+    case noMovableCandidates
+    case placeholderOnly
+}

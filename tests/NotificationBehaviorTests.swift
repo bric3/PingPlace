@@ -98,6 +98,7 @@ private final class TestControllerDelegate: NotificationControllerDelegate {
     var screenSummary = "screens=[test]"
     var panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
     var moveResults: [Bool] = []
+    var moveScanResults: [NotificationScanResult] = []
     private(set) var moveReasons: [String] = []
     private(set) var loggedMessages: [String] = []
     private(set) var clearCacheCallCount = 0
@@ -118,12 +119,15 @@ private final class TestControllerDelegate: NotificationControllerDelegate {
         clearCacheCallCount += 1
     }
 
-    func moveAllNotifications(reason: String) -> Bool {
+    func moveAllNotifications(reason: String) -> NotificationScanResult {
         moveReasons.append(reason)
-        if moveResults.isEmpty {
-            return false
+        if !moveScanResults.isEmpty {
+            return moveScanResults.removeFirst()
         }
-        return moveResults.removeFirst()
+        if !moveResults.isEmpty {
+            return moveResults.removeFirst() ? .movedNotification : .noMovableCandidates
+        }
+        return .noMovableCandidates
     }
 
     func notificationCenterPanelSignal() -> NotificationCenterPanelSignal {
@@ -343,7 +347,7 @@ private func testPanelOpenSignalUsesWidgetSignalOnlyAsOpenContinuity() throws {
 private func testRecoveryRetryActionRetriesWhenNoMoveAndAttemptsRemain() throws {
     try assertEqual(
         NotificationCenterStatePolicy.recoveryRetryAction(
-            didMoveNotification: false,
+            scanResult: .noMovableCandidates,
             attemptNumber: 3,
             maxAttempts: 10
         ),
@@ -355,7 +359,7 @@ private func testRecoveryRetryActionRetriesWhenNoMoveAndAttemptsRemain() throws 
 private func testRecoveryRetryActionStopsAfterSuccessfulMove() throws {
     try assertEqual(
         NotificationCenterStatePolicy.recoveryRetryAction(
-            didMoveNotification: true,
+            scanResult: .movedNotification,
             attemptNumber: 0,
             maxAttempts: 10
         ),
@@ -367,12 +371,34 @@ private func testRecoveryRetryActionStopsAfterSuccessfulMove() throws {
 private func testRecoveryRetryActionStopsAtAttemptLimit() throws {
     try assertEqual(
         NotificationCenterStatePolicy.recoveryRetryAction(
-            didMoveNotification: false,
+            scanResult: .noMovableCandidates,
             attemptNumber: 10,
             maxAttempts: 10
         ),
         .stop,
         "recovery should stop after exhausting retry attempts"
+    )
+}
+
+private func testPlaceholderFollowUpActionRetriesOnlyForPlaceholderResults() throws {
+    try assertEqual(
+        NotificationCenterStatePolicy.placeholderFollowUpAction(
+            scanResult: .placeholderOnly,
+            attemptNumber: 0,
+            maxAttempts: 3
+        ),
+        .retry,
+        "placeholder follow-up should retry when only placeholder windows were found"
+    )
+
+    try assertEqual(
+        NotificationCenterStatePolicy.placeholderFollowUpAction(
+            scanResult: .noMovableCandidates,
+            attemptNumber: 0,
+            maxAttempts: 3
+        ),
+        .stop,
+        "placeholder follow-up should not run for ordinary misses"
     )
 }
 
@@ -701,6 +727,71 @@ private func testControllerKeepsRetryingLongEnoughForDelayedSessionActivationNot
     try assertEqual(scheduler.scheduledActions.count, 0, "controller should stop retrying after the delayed successful session-activation move")
 }
 
+private func testControllerSchedulesPlaceholderFollowUpAfterRetryExhaustion() throws {
+    let delegate = TestControllerDelegate()
+    delegate.moveScanResults = Array(repeating: .placeholderOnly, count: 4)
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 2,
+        placeholderFollowUpInterval: 30,
+        placeholderFollowUpLimit: 2
+    )
+
+    controller.handleScreenConfigurationChanged()
+    scheduler.runNext()
+    scheduler.runNext()
+
+    try assertEqual(
+        delegate.moveReasons,
+        [
+            "didChangeScreenParametersNotification",
+            "didChangeScreenParametersNotification-retry1",
+            "didChangeScreenParametersNotification-retry2",
+        ],
+        "controller should exhaust immediate retries before scheduling placeholder follow-up"
+    )
+    try assertEqual(scheduler.scheduledActions.count, 1, "controller should schedule a placeholder follow-up after retry exhaustion")
+
+    scheduler.runNext()
+    try assertEqual(
+        delegate.moveReasons.last,
+        "didChangeScreenParametersNotification-followup1",
+        "placeholder follow-up should use a suffixed reason"
+    )
+}
+
+private func testControllerPlaceholderFollowUpStopsAfterSuccess() throws {
+    let delegate = TestControllerDelegate()
+    delegate.moveScanResults = [.placeholderOnly, .placeholderOnly, .movedNotification]
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 1,
+        placeholderFollowUpInterval: 30,
+        placeholderFollowUpLimit: 3
+    )
+
+    controller.handleScreenConfigurationChanged()
+    scheduler.runNext()
+    scheduler.runNext()
+
+    try assertEqual(
+        delegate.moveReasons,
+        [
+            "didChangeScreenParametersNotification",
+            "didChangeScreenParametersNotification-retry1",
+            "didChangeScreenParametersNotification-followup1",
+        ],
+        "controller should stop placeholder follow-up after the first successful move"
+    )
+    try assertEqual(scheduler.scheduledActions.count, 0, "successful placeholder follow-up should stop further polling")
+}
+
 private func testPlacementEngineInitializesCacheAndComputesMovePlan() throws {
     let engine = NotificationWindowPlacementEngine(paddingAboveDock: 30)
     let snapshot = NotificationWindowSnapshot(
@@ -1003,6 +1094,7 @@ struct NotificationBehaviorTestRunner {
             ("recovery retries when attempts remain", testRecoveryRetryActionRetriesWhenNoMoveAndAttemptsRemain),
             ("recovery stops after successful move", testRecoveryRetryActionStopsAfterSuccessfulMove),
             ("recovery stops at attempt limit", testRecoveryRetryActionStopsAtAttemptLimit),
+            ("placeholder follow-up retries only for placeholder results", testPlaceholderFollowUpActionRetriesOnlyForPlaceholderResults),
             ("iterative traversal finds node in cyclic graph", testFirstMatchingNodeFindsNodeInCyclicGraph),
             ("iterative traversal handles deep graph", testFirstMatchingNodeHandlesDeepGraphWithoutRecursion),
             ("iterative traversal returns nil when no match exists", testFirstMatchingNodeReturnsNilWhenNoMatchExists),
@@ -1019,6 +1111,8 @@ struct NotificationBehaviorTestRunner {
             ("controller keeps retrying for delayed screen change notifications", testControllerKeepsRetryingLongEnoughForDelayedScreenChangeNotifications),
             ("controller keeps retrying for delayed wake notifications", testControllerKeepsRetryingLongEnoughForDelayedWakeNotifications),
             ("controller keeps retrying for delayed session activation notifications", testControllerKeepsRetryingLongEnoughForDelayedSessionActivationNotifications),
+            ("controller schedules placeholder follow-up after retry exhaustion", testControllerSchedulesPlaceholderFollowUpAfterRetryExhaustion),
+            ("controller placeholder follow-up stops after success", testControllerPlaceholderFollowUpStopsAfterSuccess),
             ("placement engine initializes cache and computes move plan", testPlacementEngineInitializesCacheAndComputesMovePlan),
             ("placement engine resets cache when identifier changes", testPlacementEngineResetsCacheWhenIdentifierChanges),
             ("placement engine requests reset to cached position", testPlacementEngineRequestsResetToCachedPosition),
