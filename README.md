@@ -28,6 +28,28 @@ The app needs accessibility permissions to work. It lives in the top bar. You ca
 - Bottom Middle
 - Bottom Right
 
+### Debug build and logs
+
+To diagnose notification placement resets (especially after screen topology changes), build a debug binary:
+
+```bash
+make debug-build
+open PingPlace.app
+```
+
+This build enables debug tracing by default and writes to:
+
+```bash
+~/Library/Logs/PingPlace/debug.log
+```
+
+You can override runtime debug mode with:
+
+```bash
+defaults write com.grimridge.PingPlace debugMode -bool true   # force on
+defaults write com.grimridge.PingPlace debugMode -bool false  # force off
+```
+
 ## Requirements
 
 - macOS 14 or later
