@@ -56,6 +56,22 @@ tail -f ~/Library/Logs/PingPlace/debug.log
 rg "Moved notification|Recovery retry|placeholder follow-up" ~/Library/Logs/PingPlace/debug.log
 ```
 
+### Menu preview mode
+
+To inspect the menu UI without starting the Accessibility/event-handling backend, launch a separate preview instance:
+
+```bash
+open -n PingPlace.app --args --menu-preview
+```
+
+Preview mode:
+
+- shows the menu and 3x3 position picker
+- does not request Accessibility permissions
+- does not move notifications
+- does not persist picker selections
+- replaces any previous preview instance
+
 ## Build metadata
 
 Builds generate metadata in `.build/BuildInfo.generated.swift` at build time. The startup log includes:
