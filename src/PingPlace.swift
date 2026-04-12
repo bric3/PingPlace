@@ -2,44 +2,75 @@ import ApplicationServices
 import Cocoa
 import os.log
 
-enum NotificationPosition: String, CaseIterable {
-    case topLeft, topMiddle, topRight
-    case middleLeft, deadCenter, middleRight
-    case bottomLeft, bottomMiddle, bottomRight
+final class FileDebugLogger {
+    private let fileURL: URL
+    private let queue: DispatchQueue = .init(label: "com.grimridge.PingPlace.FileDebugLogger")
+    private let timestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 
-    var displayName: String {
-        switch self {
-        case .topLeft: return "Top Left"
-        case .topMiddle: return "Top Middle"
-        case .topRight: return "Top Right"
-        case .middleLeft: return "Middle Left"
-        case .deadCenter: return "Middle"
-        case .middleRight: return "Middle Right"
-        case .bottomLeft: return "Bottom Left"
-        case .bottomMiddle: return "Bottom Middle"
-        case .bottomRight: return "Bottom Right"
+    var path: String {
+        fileURL.path
+    }
+
+    init?() {
+        let logsDirectory = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library")
+            .appendingPathComponent("Logs")
+            .appendingPathComponent("PingPlace")
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
+            fileURL = logsDirectory.appendingPathComponent("debug.log")
+            if !fm.fileExists(atPath: fileURL.path) {
+                fm.createFile(atPath: fileURL.path, contents: nil)
+            }
+        } catch {
+            return nil
+        }
+    }
+
+    func log(_ message: String) {
+        queue.async {
+            let timestamp = self.timestampFormatter.string(from: Date())
+            let line = "[\(timestamp)] \(message)\n"
+            guard let data = line.data(using: .utf8) else { return }
+            guard let handle = try? FileHandle(forWritingTo: self.fileURL) else { return }
+            defer { try? handle.close() }
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } catch {}
         }
     }
 }
 
-class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate {
+class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, NotificationControllerDelegate, NotificationEventHandler {
     private let notificationCenterBundleID: String = "com.apple.notificationcenterui"
+    private let bannerSubroles: [String] = [
+        "AXNotificationCenterBanner",
+        "AXNotificationCenterAlert",
+        "AXNotificationCenterNotification",
+        "AXNotificationCenterBannerWindow",
+    ]
     private let paddingAboveDock: CGFloat = 30
-    private var axObserver: AXObserver?
     private var statusItem: NSStatusItem?
     private var isMenuBarIconHidden: Bool = UserDefaults.standard.bool(forKey: "isMenuBarIconHidden")
     private let logger: Logger = .init(subsystem: "com.grimridge.PingPlace", category: "NotificationMover")
-    private let debugMode: Bool = UserDefaults.standard.bool(forKey: "debugMode")
+    private let debugMode: Bool = {
+        if let explicitDebugMode = UserDefaults.standard.object(forKey: "debugMode") as? Bool {
+            return explicitDebugMode
+        }
+        #if PINGPLACE_DEBUG_BUILD
+            return true
+        #else
+            return false
+        #endif
+    }()
+    private lazy var fileDebugLogger: FileDebugLogger? = debugMode ? FileDebugLogger() : nil
     private let launchAgentPlistPath: String = NSHomeDirectory() + "/Library/LaunchAgents/com.grimridge.PingPlace.plist"
-
-    private var cachedInitialPosition: CGPoint?
-    private var cachedInitialWindowSize: CGSize?
-    private var cachedInitialNotifSize: CGSize?
-    private var cachedInitialPadding: CGFloat?
-
-    private var widgetMonitorTimer: Timer?
-    private var lastWidgetWindowCount: Int = 0
-    private var pollingEndTime: Date?
 
     private var currentPosition: NotificationPosition = {
         guard let rawValue: String = UserDefaults.standard.string(forKey: "notificationPosition"),
@@ -50,18 +81,44 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return position
     }()
 
-    private func debugLog(_ message: String) {
+    private lazy var controller = NotificationController(
+        delegate: self,
+        scheduler: NotificationTimerScheduler(),
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 20,
+        placeholderFollowUpInterval: 30,
+        placeholderFollowUpLimit: 60
+    )
+    private lazy var eventSource = NotificationEventSource(
+        notificationCenterBundleID: notificationCenterBundleID,
+        handler: self,
+        log: { [weak self] in self?.debugLog($0) }
+    )
+    private let axClient: NotificationCenterAXClient = SystemNotificationCenterAXClient()
+    private let placementEngine = NotificationWindowPlacementEngine(paddingAboveDock: 30)
+
+    func debugLog(_ message: String) {
         guard debugMode else { return }
         logger.info("\(message, privacy: .public)")
+        fileDebugLogger?.log(message)
+    }
+
+    func notificationPosition() -> NotificationPosition {
+        currentPosition
     }
 
     func applicationDidFinishLaunching(_: Notification) {
+        if let debugLogPath = fileDebugLogger?.path {
+            debugLog("Debug mode enabled. Writing trace file to: \(debugLogPath)")
+        }
+        debugLog("Application launched. \(buildIdentitySummary())")
+        debugLog(screenTopologySummary())
         checkAccessibilityPermissions()
-        setupObserver()
+        eventSource.start()
         if !isMenuBarIconHidden {
             setupStatusItem()
         }
-        moveAllNotifications()
+        moveAllNotifications(reason: "applicationDidFinishLaunching")
     }
 
     func applicationWillBecomeActive(_: Notification) {
@@ -210,94 +267,175 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         debugLog("Position changed: \(oldPosition.displayName) → \(position.displayName)")
-        moveAllNotifications()
+        moveAllNotifications(reason: "changePosition")
     }
 
-    private func cacheInitialNotificationData(windowSize: CGSize, notifSize: CGSize, position: CGPoint) {
-        guard cachedInitialPosition == nil else { return }
-
-        let screenWidth: CGFloat = NSScreen.main!.frame.width
-        var padding: CGFloat
-        var effectivePosition = position
-
-        if position.x + notifSize.width > screenWidth {
-            debugLog("Detected incorrect initial position.x: \(position.x). Recalculating position.")
-            padding = 16.0
-            effectivePosition.x = screenWidth - notifSize.width - padding
-        } else {
-            let rightEdge: CGFloat = position.x + notifSize.width
-            padding = screenWidth - rightEdge
-        }
-
-        cachedInitialPosition = effectivePosition
-        cachedInitialWindowSize = windowSize
-        cachedInitialNotifSize = notifSize
-        cachedInitialPadding = padding
-
-        debugLog("Initial notification cached - size: \(notifSize), position: \(effectivePosition), padding: \(padding)")
+    private enum WindowMoveResult {
+        case moved
+        case noBannerContainer
+        case nonMovableCandidate
     }
 
-    func moveNotification(_ window: AXUIElement) {
-        guard currentPosition != .topRight else { return }
+    func moveNotification(_ window: AXUIElement) -> Bool {
+        moveNotificationResult(window) == .moved
+    }
 
-        // if let identifier: String = getWindowIdentifier(window), identifier.hasPrefix("widget") {
-        //     return
-        // }
+    private func moveNotificationResult(_ window: AXUIElement) -> WindowMoveResult {
+        guard currentPosition != .topRight else { return .nonMovableCandidate }
 
-        if hasNotificationCenterUI() {
-            debugLog("Skipping move - Notification Center UI detected")
-            return
-        }
+        let windowIdentifier = axClient.windowIdentifier(window)
+        let focusedWindow = axClient.isFocused(window)
+        let windowSize = axClient.size(of: window)
+        let windowPosition = axClient.position(of: window)
+        let bannerContainer = axClient.firstElement(root: window, targetSubroles: bannerSubroles)
+        let bannerIdentifier = bannerContainer.flatMap(axClient.windowIdentifier)
+        let bannerFocused = bannerContainer.map(axClient.isFocused) ?? false
+        let bannerSubrole = bannerContainer.flatMap(axClient.subrole)
+        let notifSize = bannerContainer.flatMap(axClient.size)
+        let position = bannerContainer.flatMap(axClient.position)
 
-        let targetSubroles: [String] = ["AXNotificationCenterBanner", "AXNotificationCenterAlert"]
-        guard let windowSize: CGSize = getSize(of: window),
-              let bannerContainer: AXUIElement = findElementWithSubrole(root: window, targetSubroles: targetSubroles),
-              let notifSize: CGSize = getSize(of: bannerContainer),
-              let position: CGPoint = getPosition(of: bannerContainer)
+        guard let resolvedWindowSize = windowSize,
+              let resolvedBannerContainer = bannerContainer,
+              let resolvedNotifSize = notifSize,
+              let resolvedPosition = position
         else {
-            debugLog("Failed to get notification dimensions or find banner container")
-            return
+            let rootFingerprint = windowFingerprint(
+                window: window,
+                identifier: windowIdentifier,
+                focused: focusedWindow,
+                windowSize: windowSize,
+                notifPosition: windowPosition
+            )
+            let bannerFingerprint = bannerContainer.map {
+                elementFingerprint(
+                    $0,
+                    identifier: bannerIdentifier,
+                    focused: bannerFocused,
+                    size: notifSize,
+                    position: position
+                )
+            } ?? "none"
+            debugLog(
+                "Failed to get notification dimensions or find banner container: " +
+                    "root=\(rootFingerprint), " +
+                    "bannerFound=\(bannerContainer != nil), " +
+                    "banner=\(bannerFingerprint)"
+            )
+            return .noBannerContainer
         }
-
-        if cachedInitialPosition == nil {
-            cacheInitialNotificationData(windowSize: windowSize, notifSize: notifSize, position: position)
-        } else if position != cachedInitialPosition {
-            setPosition(window, x: cachedInitialPosition!.x, y: cachedInitialPosition!.y)
-        }
-
-        let newPosition: (x: CGFloat, y: CGFloat) = calculateNewPosition(
-            windowSize: cachedInitialWindowSize!,
-            notifSize: cachedInitialNotifSize!,
-            position: cachedInitialPosition!,
-            padding: cachedInitialPadding!
+        let snapshot = NotificationWindowSnapshot(
+            identifier: windowIdentifier,
+            focused: focusedWindow,
+            isNotificationCenterPanelOpen: hasNotificationCenterUI(),
+            notificationSubrole: bannerSubrole,
+            windowSize: resolvedWindowSize,
+            notificationSize: resolvedNotifSize,
+            notificationPosition: resolvedPosition
+        )
+        let evaluation = placementEngine.evaluateMove(
+            snapshot: snapshot,
+            currentPosition: currentPosition,
+            screens: currentScreenDescriptors()
         )
 
-        setPosition(window, x: newPosition.x, y: newPosition.y)
+        switch evaluation {
+        case .skip(.skipPanelOpen):
+            debugLog(
+                "Skipping move - Notification Center panel is open: " +
+                    "root=\(windowFingerprint(window: window, identifier: windowIdentifier, focused: focusedWindow, windowSize: resolvedWindowSize, notifPosition: windowPosition)), " +
+                    "banner=\(elementFingerprint(resolvedBannerContainer, identifier: bannerIdentifier, focused: bannerFocused, size: resolvedNotifSize, position: resolvedPosition))"
+            )
+            return .nonMovableCandidate
+        case .skip(.skipWidget):
+            debugLog("Skipping move - widget window detected: \(windowFingerprint(window: window, identifier: windowIdentifier, focused: focusedWindow))")
+            return .nonMovableCandidate
+        case .skip(.skipFocused):
+            debugLog("Skipping move - focused Notification Center window: \(windowFingerprint(window: window, identifier: windowIdentifier, focused: focusedWindow))")
+            return .nonMovableCandidate
+        case .skip(.move):
+            return .nonMovableCandidate
+        case let .move(plan):
+            if let identifiers = plan.cacheResetIdentifiers {
+                let previousIdentifier = identifiers.previous ?? "none"
+                let currentIdentifier = identifiers.current ?? "none"
+                debugLog("Window identifier changed (\(previousIdentifier) → \(currentIdentifier)). Resetting cached geometry.")
+            }
 
-        pollingEndTime = Date().addingTimeInterval(6.5)
-        debugLog("Moved notification to \(currentPosition.displayName) at (\(newPosition.x), \(newPosition.y))")
+            debugLog(
+                "Window candidate: " +
+                    "root=\(windowFingerprint(window: window, identifier: windowIdentifier, focused: focusedWindow, windowSize: resolvedWindowSize, notifPosition: windowPosition)), " +
+                    "banner=\(elementFingerprint(resolvedBannerContainer, identifier: bannerIdentifier, focused: bannerFocused, size: resolvedNotifSize, position: resolvedPosition)), " +
+                    "resolvedScreen=\(screenSummary(from: plan.resolvedScreen)), " +
+                    "referenceScreen=\(screenSummary(from: plan.referenceScreen))"
+            )
+
+            if plan.initialPositionRecalculated {
+                debugLog("Detected incorrect initial position.x: \(resolvedPosition.x). Recalculating position.")
+            }
+            if plan.cacheInitialized, let cache = placementEngine.cache {
+                debugLog("Initial notification cached - size: \(cache.initialNotificationSize), position: \(cache.initialPosition), padding: \(cache.initialPadding)")
+            }
+            if let resetPosition = plan.resetPosition {
+                axClient.setPosition(window, point: resetPosition)
+            }
+
+            let cache = placementEngine.cache!
+            let dockSize = plan.referenceScreen.map(ScreenResolutionPolicy.dockSize(for:)) ?? 0
+            let newPosition = calculateNewPosition(
+                windowSize: cache.initialWindowSize,
+                notifSize: cache.initialNotificationSize,
+                position: cache.initialPosition,
+                padding: cache.initialPadding,
+                dockSize: dockSize
+            )
+            axClient.setPosition(window, point: plan.targetPosition)
+            controller.noteNotificationMoved()
+            debugLog(
+                "Moved notification to \(currentPosition.displayName) at (\(newPosition.x), \(newPosition.y)) " +
+                    "from root=\(windowFingerprint(window: window, identifier: windowIdentifier, focused: focusedWindow, windowSize: resolvedWindowSize, notifPosition: windowPosition)), " +
+                    "banner=\(elementFingerprint(resolvedBannerContainer, identifier: bannerIdentifier, focused: bannerFocused, size: resolvedNotifSize, position: resolvedPosition)), " +
+                    "referenceScreen=\(screenSummary(from: plan.referenceScreen))"
+            )
+            return .moved
+        }
     }
 
-    private func moveAllNotifications() {
-        guard let pid: pid_t = NSWorkspace.shared.runningApplications.first(where: {
-            $0.bundleIdentifier == notificationCenterBundleID
-        })?.processIdentifier else {
+    @discardableResult
+    func moveAllNotifications(reason: String = "manual") -> NotificationScanResult {
+        guard let pid = axClient.notificationCenterProcessIdentifier(bundleID: notificationCenterBundleID) else {
             debugLog("Cannot find Notification Center process")
-            return
+            return .noMovableCandidates
         }
+        debugLog("moveAllNotifications triggered (\(reason)). \(screenTopologySummary())")
 
-        let app: AXUIElement = AXUIElementCreateApplication(pid)
-        var windowsRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-              let windows: [AXUIElement] = windowsRef as? [AXUIElement]
-        else {
+        guard let windows = axClient.notificationWindows(pid: pid) else {
             debugLog("Failed to get notification windows")
-            return
+            return .noMovableCandidates
         }
+        debugLog("Notification Center windows snapshot (\(reason)): count=\(windows.count) [\(windowInventorySummary(windows))]")
 
-        for window in windows {
-            moveNotification(window)
+        var movedAny = false
+        var foundBannerContainer = false
+        for (index, window) in windows.enumerated() {
+            debugLog("Inspecting Notification Center window \(index + 1)/\(windows.count): \(windowFingerprint(window: window, identifier: axClient.windowIdentifier(window), focused: axClient.isFocused(window), windowSize: axClient.size(of: window), notifPosition: axClient.position(of: window)))")
+            switch moveNotificationResult(window) {
+            case .moved:
+                movedAny = true
+                foundBannerContainer = true
+            case .nonMovableCandidate:
+                foundBannerContainer = true
+            case .noBannerContainer:
+                break
+            }
         }
+        debugLog("moveAllNotifications completed (\(reason)): movedAny=\(movedAny), windows=\(windows.count)")
+        if movedAny {
+            return .movedNotification
+        }
+        if !foundBannerContainer, !windows.isEmpty {
+            return .placeholderOnly
+        }
+        return .noMovableCandidates
     }
 
     @objc func showAbout() {
@@ -378,186 +516,228 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return false
     }
 
-    func setupObserver() {
-        guard let pid: pid_t = NSWorkspace.shared.runningApplications.first(where: {
-            $0.bundleIdentifier == notificationCenterBundleID
-        })?.processIdentifier else {
-            debugLog("Failed to setup observer - Notification Center not found")
-            return
+    func clearCachedNotificationGeometry() {
+        placementEngine.clearCache()
+    }
+
+    func hasNotificationCenterUI() -> Bool {
+        guard let pid = axClient.notificationCenterProcessIdentifier(bundleID: notificationCenterBundleID) else { return false }
+        return axClient.hasFocusedWindow(pid: pid)
+    }
+
+    func notificationCenterPanelSignal() -> NotificationCenterPanelSignal {
+        guard let pid = axClient.notificationCenterProcessIdentifier(bundleID: notificationCenterBundleID) else {
+            return NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
         }
+        return NotificationCenterPanelSignal(
+            hasFocusedWindow: axClient.hasFocusedWindow(pid: pid),
+            hasWidgetUI: axClient.hasWidgetUI(pid: pid)
+        )
+    }
 
-        let app: AXUIElement = AXUIElementCreateApplication(pid)
-        var observer: AXObserver?
-        AXObserverCreate(pid, observerCallback, &observer)
-        axObserver = observer
+    func notificationCenterWindowCreated(_ element: AXUIElement) {
+        _ = moveNotification(element)
+    }
 
-        let selfPtr: UnsafeMutableRawPointer = Unmanaged.passUnretained(self).toOpaque()
-        AXObserverAddNotification(observer!, app, kAXWindowCreatedNotification as CFString, selfPtr)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer!), .defaultMode)
+    func notificationCenterStateMonitorTick() {
+        controller.handleWidgetMonitorTick()
+    }
 
-        debugLog("Observer setup complete for Notification Center (PID: \(pid))")
-
-        widgetMonitorTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
-            self.checkForWidgetChanges()
+    func screenParametersChanged() {
+        DispatchQueue.main.async {
+            self.controller.handleScreenConfigurationChanged()
         }
     }
 
-    private func getWindowIdentifier(_ element: AXUIElement) -> String? {
-        var identifierRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, kAXIdentifierAttribute as CFString, &identifierRef) == .success else {
-            return nil
+    func sessionDidBecomeActive() {
+        DispatchQueue.main.async {
+            self.controller.handleSessionDidBecomeActive()
         }
-        return identifierRef as? String
     }
 
-    private func checkForWidgetChanges() {
-        guard let pollingEnd: Date = pollingEndTime, Date() < pollingEnd else {
-            return
-        }
-
-        let hasNCUI: Bool = hasNotificationCenterUI()
-        let currentNCState: Int = hasNCUI ? 1 : 0
-
-        if lastWidgetWindowCount != currentNCState {
-            debugLog("Notification Center state changed (\(lastWidgetWindowCount) → \(currentNCState)) - triggering move")
-            if !hasNCUI {
-                moveAllNotifications()
-            }
-        }
-
-        lastWidgetWindowCount = currentNCState
+    func systemWillSleep() {
+        debugLog("System will sleep. \(screenTopologySummary())")
     }
 
-    private func hasNotificationCenterUI() -> Bool {
-        guard let pid: pid_t = NSWorkspace.shared.runningApplications.first(where: {
-            $0.bundleIdentifier == notificationCenterBundleID
-        })?.processIdentifier else { return false }
-
-        let app: AXUIElement = AXUIElementCreateApplication(pid)
-        return findElementWithWidgetIdentifier(root: app) != nil
-    }
-
-    private func findElementWithWidgetIdentifier(root: AXUIElement) -> AXUIElement? {
-        if let identifier: String = getWindowIdentifier(root), identifier.hasPrefix("widget-local") {
-            return root
+    func systemDidWake() {
+        DispatchQueue.main.async {
+            self.controller.handleWake()
         }
-
-        var childrenRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(root, kAXChildrenAttribute as CFString, &childrenRef) == .success,
-              let children: [AXUIElement] = childrenRef as? [AXUIElement] else { return nil }
-
-        for child: AXUIElement in children {
-            if let found: AXUIElement = findElementWithWidgetIdentifier(root: child) {
-                return found
-            }
-        }
-        return nil
-    }
-
-    private func getPosition(of element: AXUIElement) -> CGPoint? {
-        var positionValue: AnyObject?
-        AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &positionValue)
-        guard let posVal: AnyObject = positionValue, AXValueGetType(posVal as! AXValue) == .cgPoint else {
-            return nil
-        }
-        var position = CGPoint.zero
-        AXValueGetValue(posVal as! AXValue, .cgPoint, &position)
-        return position
     }
 
     private func calculateNewPosition(
         windowSize: CGSize,
         notifSize: CGSize,
         position: CGPoint,
-        padding: CGFloat
+        padding: CGFloat,
+        dockSize: CGFloat
     ) -> (x: CGFloat, y: CGFloat) {
         debugLog("Calculating new position with windowSize: \(windowSize), notifSize: \(notifSize), position: \(position), padding: \(padding)")
-        let newX: CGFloat
-        let newY: CGFloat
+        let result = NotificationGeometry.newPosition(
+            currentPosition: currentPosition,
+            windowSize: windowSize,
+            notifSize: notifSize,
+            position: position,
+            padding: padding,
+            dockSize: dockSize,
+            paddingAboveDock: paddingAboveDock
+        )
 
-        switch currentPosition {
-        case .topLeft, .middleLeft, .bottomLeft:
-            newX = padding - position.x
-        case .topMiddle, .bottomMiddle, .deadCenter:
-            newX = (windowSize.width - notifSize.width) / 2 - position.x
-        case .topRight, .middleRight, .bottomRight:
-            newX = 0
-        }
-
-        switch currentPosition {
-        case .topLeft, .topMiddle, .topRight:
-            newY = 0
-        case .middleLeft, .middleRight, .deadCenter:
-            let dockSize: CGFloat = NSScreen.main!.frame.height - NSScreen.main!.visibleFrame.height
-            newY = (windowSize.height - notifSize.height) / 2 - dockSize
-        case .bottomLeft, .bottomMiddle, .bottomRight:
-            let dockSize: CGFloat = NSScreen.main!.frame.height - NSScreen.main!.visibleFrame.height
-            newY = windowSize.height - notifSize.height - dockSize - paddingAboveDock
-        }
-
-        debugLog("Calculated new position - x: \(newX), y: \(newY)")
-        return (newX, newY)
+        debugLog("Calculated new position - x: \(result.x), y: \(result.y)")
+        return result
     }
 
-    private func getWindowTitle(_ element: AXUIElement) -> String? {
-        var titleRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &titleRef) == .success else {
+    private func currentScreenDescriptors() -> [ScreenDescriptor] {
+        NSScreen.screens.map { screen in
+            ScreenDescriptor(
+                frame: screen.frame,
+                visibleFrame: screen.visibleFrame,
+                isMain: screen == NSScreen.main
+            )
+        }
+    }
+
+    private func screen(from descriptor: ScreenDescriptor?) -> NSScreen? {
+        guard let descriptor else { return nil }
+        return NSScreen.screens.first(where: { $0.frame == descriptor.frame && $0.visibleFrame == descriptor.visibleFrame })
+    }
+
+    private func windowFingerprint(
+        window: AXUIElement,
+        identifier: String?,
+        focused: Bool,
+        windowSize: CGSize? = nil,
+        notifSize: CGSize? = nil,
+        notifPosition: CGPoint? = nil,
+        resolvedScreen: NSScreen? = nil
+    ) -> String {
+        let role = axClient.role(of: window) ?? "unknown"
+        let subrole = axClient.subrole(of: window) ?? "unknown"
+        return elementFingerprint(
+            role: role,
+            subrole: subrole,
+            identifier: identifier,
+            focused: focused,
+            size: windowSize,
+            secondarySize: notifSize,
+            position: notifPosition,
+            screenSummary: screenSummary(from: resolvedScreen)
+        )
+    }
+
+    private func elementFingerprint(
+        _ element: AXUIElement,
+        identifier: String?,
+        focused: Bool,
+        size: CGSize? = nil,
+        position: CGPoint? = nil
+    ) -> String {
+        let role = axClient.role(of: element) ?? "unknown"
+        let subrole = axClient.subrole(of: element) ?? "unknown"
+        return elementFingerprint(
+            role: role,
+            subrole: subrole,
+            identifier: identifier,
+            focused: focused,
+            size: size,
+            secondarySize: nil,
+            position: position,
+            screenSummary: "n/a"
+        )
+    }
+
+    private func elementFingerprint(
+        role: String,
+        subrole: String,
+        identifier: String?,
+        focused: Bool,
+        size: CGSize?,
+        secondarySize: CGSize?,
+        position: CGPoint?,
+        screenSummary: String
+    ) -> String {
+        let id = identifier ?? "none"
+        let sizeSummary = size.map(self.sizeSummary) ?? "n/a"
+        let secondarySizeSummary = secondarySize.map(self.sizeSummary) ?? "n/a"
+        let positionSummary = position.map(self.pointSummary) ?? "n/a"
+        return "id=\(id),focused=\(focused),role=\(role),subrole=\(subrole),windowSize=\(sizeSummary),notifSize=\(secondarySizeSummary),notifPos=\(positionSummary),screen=\(screenSummary)"
+    }
+
+    private func windowInventorySummary(_ windows: [AXUIElement]) -> String {
+        windows.enumerated().map { index, window in
+            let summary = windowFingerprint(
+                window: window,
+                identifier: axClient.windowIdentifier(window),
+                focused: axClient.isFocused(window),
+                windowSize: axClient.size(of: window),
+                notifPosition: axClient.position(of: window)
+            )
+            return "#\(index + 1){\(summary)}"
+        }.joined(separator: " ")
+    }
+
+    private func screenSummary(from descriptor: ScreenDescriptor?) -> String {
+        let resolvedScreen = descriptor.flatMap { screen(from: $0) }
+        return screenSummary(from: resolvedScreen)
+    }
+
+    private func screenSummary(from screen: NSScreen?) -> String {
+        guard let screen else { return "n/a" }
+        let id = screenIdentifier(screen) ?? "unknown"
+        let frame = rectSummary(screen.frame)
+        let visible = rectSummary(screen.visibleFrame)
+        let isMain = screen == NSScreen.main
+        return "{id=\(id),main=\(isMain),frame=\(frame),visible=\(visible)}"
+    }
+
+    private func sizeSummary(_ size: CGSize) -> String {
+        "\(Int(size.width.rounded()))x\(Int(size.height.rounded()))"
+    }
+
+    private func pointSummary(_ point: CGPoint) -> String {
+        "\(Int(point.x.rounded())),\(Int(point.y.rounded()))"
+    }
+
+    func screenTopologySummary() -> String {
+        let screensSummary = NSScreen.screens.enumerated().map { index, screen in
+            let id = screenIdentifier(screen) ?? "unknown"
+            let frame = rectSummary(screen.frame)
+            let visibleFrame = rectSummary(screen.visibleFrame)
+            let isMain = screen == NSScreen.main
+            return "#\(index){id=\(id),main=\(isMain),frame=\(frame),visible=\(visibleFrame)}"
+        }.joined(separator: " ")
+        return "screens=[\(screensSummary)]"
+    }
+
+    private func screenIdentifier(_ screen: NSScreen) -> String? {
+        guard let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
             return nil
         }
-        return titleRef as? String
+        return String(screenNumber.uint32Value)
     }
 
-    private func getSize(of element: AXUIElement) -> CGSize? {
-        var sizeValue: AnyObject?
-        AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeValue)
-        guard let sizeVal: AnyObject = sizeValue, AXValueGetType(sizeVal as! AXValue) == .cgSize else {
-            return nil
-        }
-        var size = CGSize.zero
-        AXValueGetValue(sizeVal as! AXValue, .cgSize, &size)
-        return size
+    private func rectSummary(_ rect: CGRect) -> String {
+        let x = Int(rect.origin.x.rounded())
+        let y = Int(rect.origin.y.rounded())
+        let w = Int(rect.size.width.rounded())
+        let h = Int(rect.size.height.rounded())
+        return "\(x),\(y),\(w)x\(h)"
     }
 
-    private func setPosition(_ element: AXUIElement, x: CGFloat, y: CGFloat) {
-        var point = CGPoint(x: x, y: y)
-        let value: AXValue = AXValueCreate(.cgPoint, &point)!
-        AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value)
+    private func buildIdentitySummary() -> String {
+        let shortVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "N/A"
+        let bundleVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "N/A"
+        return "build={version=\(shortVersion),bundle=\(bundleVersion),commit=\(GeneratedBuildInfo.gitCommit),dirty=\(GeneratedBuildInfo.gitDirtyState),builtAt=\(GeneratedBuildInfo.buildTimestamp),sourceFingerprint=\(GeneratedBuildInfo.sourceFingerprint)}"
     }
 
-    private func findElementWithSubrole(root: AXUIElement, targetSubroles: [String]) -> AXUIElement? {
-        var subroleRef: AnyObject?
-        if AXUIElementCopyAttributeValue(root, kAXSubroleAttribute as CFString, &subroleRef) == .success {
-            if let subrole: String = subroleRef as? String, targetSubroles.contains(subrole) {
-                return root
-            }
-        }
-
-        var childrenRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(root, kAXChildrenAttribute as CFString, &childrenRef) == .success,
-              let children: [AXUIElement] = childrenRef as? [AXUIElement]
-        else {
-            return nil
-        }
-
-        for child: AXUIElement in children {
-            if let found: AXUIElement = findElementWithSubrole(root: child, targetSubroles: targetSubroles) {
-                return found
-            }
-        }
-        return nil
-    }
 }
 
-private func observerCallback(observer _: AXObserver, element: AXUIElement, notification: CFString, context: UnsafeMutableRawPointer?) {
-    let mover: NotificationMover = Unmanaged<NotificationMover>.fromOpaque(context!).takeUnretainedValue()
-
-    let notificationString: String = notification as String
-    if notificationString == kAXWindowCreatedNotification as String {
-        mover.moveNotification(element)
+@main
+struct PingPlaceApp {
+    static func main() {
+        let app: NSApplication = .shared
+        let delegate: NotificationMover = .init()
+        app.delegate = delegate
+        app.run()
     }
 }
-
-let app: NSApplication = .shared
-let delegate: NotificationMover = .init()
-app.delegate = delegate
-app.run()
