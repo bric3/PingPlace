@@ -58,6 +58,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     private let paddingAboveDock: CGFloat = 30
     private var statusItem: NSStatusItem?
     private var isMenuBarIconHidden: Bool = UserDefaults.standard.bool(forKey: "isMenuBarIconHidden")
+    private let launchMode = PingPlaceLaunchMode.detect(arguments: CommandLine.arguments, environment: ProcessInfo.processInfo.environment)
     private let logger: Logger = .init(subsystem: "com.grimridge.PingPlace", category: "NotificationMover")
     private let debugMode: Bool = {
         if let explicitDebugMode = UserDefaults.standard.object(forKey: "debugMode") as? Bool {
@@ -71,6 +72,8 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     }()
     private lazy var fileDebugLogger: FileDebugLogger? = debugMode ? FileDebugLogger() : nil
     private let launchAgentPlistPath: String = NSHomeDirectory() + "/Library/LaunchAgents/com.grimridge.PingPlace.plist"
+    private weak var positionPickerView: NotificationPositionPickerView?
+    private var previewTerminationObserver: NSObjectProtocol?
 
     private var currentPosition: NotificationPosition = {
         guard let rawValue: String = UserDefaults.standard.string(forKey: "notificationPosition"),
@@ -113,12 +116,20 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         }
         debugLog("Application launched. \(buildIdentitySummary())")
         debugLog(screenTopologySummary())
-        checkAccessibilityPermissions()
-        eventSource.start()
-        if !isMenuBarIconHidden {
+        if launchMode == .menuPreview {
+            debugLog("Menu preview mode enabled. Accessibility checks, event listeners, settings writes, and notification moves are disabled.")
+            terminatePreviousPreviewInstanceIfNeeded()
+            registerPreviewTerminationObserver()
+        } else {
+            checkAccessibilityPermissions()
+            eventSource.start()
+        }
+        if launchMode == .menuPreview || !isMenuBarIconHidden {
             setupStatusItem()
         }
-        moveAllNotifications(reason: "applicationDidFinishLaunching")
+        if launchMode == .full {
+            moveAllNotifications(reason: "applicationDidFinishLaunching")
+        }
     }
 
     func applicationWillBecomeActive(_: Notification) {
@@ -126,6 +137,13 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         isMenuBarIconHidden = false
         UserDefaults.standard.set(false, forKey: "isMenuBarIconHidden")
         setupStatusItem()
+    }
+
+    func applicationWillTerminate(_: Notification) {
+        if let previewTerminationObserver {
+            DistributedNotificationCenter.default().removeObserver(previewTerminationObserver)
+            self.previewTerminationObserver = nil
+        }
     }
 
     private func checkAccessibilityPermissions() {
@@ -155,6 +173,9 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         if let button: NSStatusBarButton = statusItem?.button, let menuBarIcon = NSImage(named: "MenuBarIcon") {
             menuBarIcon.isTemplate = true
             button.image = menuBarIcon
+            if launchMode == .menuPreview {
+                button.toolTip = "PingPlace Preview"
+            }
         }
         statusItem?.menu = createMenu()
     }
@@ -162,33 +183,86 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     private func createMenu() -> NSMenu {
         let menu = NSMenu()
 
-        for position: NotificationPosition in NotificationPosition.allCases {
-            let item = NSMenuItem(title: position.displayName, action: #selector(changePosition(_:)), keyEquivalent: "")
-            item.representedObject = position
-            item.state = position == currentPosition ? .on : .off
-            menu.addItem(item)
+        if launchMode == .menuPreview {
+            let previewInfoItem = NSMenuItem(title: "Preview", action: nil, keyEquivalent: "")
+            previewInfoItem.isEnabled = false
+            menu.addItem(previewInfoItem)
+            // AppKit menu width is driven by the widest item title, so this explanatory line widens the preview menu.
+            let previewDetailItem = NSMenuItem(title: "Selections stay local to this preview.", action: nil, keyEquivalent: "")
+            previewDetailItem.isEnabled = false
+            menu.addItem(previewDetailItem)
+            menu.addItem(NSMenuItem.separator())
         }
+
+        let positionPickerItem = NSMenuItem()
+        let pickerView = NotificationPositionPickerView(selectedPosition: currentPosition) { [weak self] position in
+            self?.setPosition(position)
+        }
+        positionPickerItem.view = pickerView
+        positionPickerItem.isEnabled = true
+        positionPickerView = pickerView
+        menu.addItem(positionPickerItem)
 
         menu.addItem(NSMenuItem.separator())
 
         let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
         launchItem.state = FileManager.default.fileExists(atPath: launchAgentPlistPath) ? .on : .off
+        if launchMode == .menuPreview {
+            launchItem.action = #selector(handlePreviewOnlyAction(_:))
+        }
         menu.addItem(launchItem)
 
-        menu.addItem(NSMenuItem(title: "Hide Menu Bar Icon", action: #selector(toggleMenuBarIcon(_:)), keyEquivalent: ""))
+        let hideMenuBarIconItem = NSMenuItem(title: "Hide Menu Bar Icon", action: #selector(toggleMenuBarIcon(_:)), keyEquivalent: "")
+        if launchMode == .menuPreview {
+            hideMenuBarIconItem.action = #selector(handlePreviewOnlyAction(_:))
+        }
+        menu.addItem(hideMenuBarIconItem)
         menu.addItem(NSMenuItem.separator())
 
         let donateMenu = NSMenuItem(title: "Donate", action: nil, keyEquivalent: "")
         let donateSubmenu = NSMenu()
-        donateSubmenu.addItem(NSMenuItem(title: "Ko-fi", action: #selector(openKofi), keyEquivalent: ""))
-        donateSubmenu.addItem(NSMenuItem(title: "Buy Me a Coffee", action: #selector(openBuyMeACoffee), keyEquivalent: ""))
+        let kofiItem = NSMenuItem(title: "Ko-fi", action: #selector(openKofi), keyEquivalent: "")
+        let buyMeACoffeeItem = NSMenuItem(title: "Buy Me a Coffee", action: #selector(openBuyMeACoffee), keyEquivalent: "")
+        if launchMode == .menuPreview {
+            kofiItem.action = #selector(handlePreviewOnlyAction(_:))
+            buyMeACoffeeItem.action = #selector(handlePreviewOnlyAction(_:))
+        }
+        donateSubmenu.addItem(kofiItem)
+        donateSubmenu.addItem(buyMeACoffeeItem)
         donateMenu.submenu = donateSubmenu
 
         menu.addItem(NSMenuItem(title: "About", action: #selector(showAbout), keyEquivalent: ""))
         menu.addItem(donateMenu)
-        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        let quitTitle = launchMode == .menuPreview ? "Quit Preview" : "Quit"
+        menu.addItem(NSMenuItem(title: quitTitle, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         return menu
+    }
+
+    private func terminatePreviousPreviewInstanceIfNeeded() {
+        DistributedNotificationCenter.default().postNotificationName(
+            PingPlaceMenuPreviewIPC.terminatePreviewNotification,
+            object: nil,
+            userInfo: PingPlaceMenuPreviewIPC.terminationUserInfo(senderProcessID: ProcessInfo.processInfo.processIdentifier),
+            deliverImmediately: true
+        )
+    }
+
+    private func registerPreviewTerminationObserver() {
+        previewTerminationObserver = DistributedNotificationCenter.default().addObserver(
+            forName: PingPlaceMenuPreviewIPC.terminatePreviewNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard PingPlaceMenuPreviewIPC.shouldTerminatePreview(
+                currentProcessID: ProcessInfo.processInfo.processIdentifier,
+                userInfo: notification.userInfo
+            ) else {
+                return
+            }
+            self?.debugLog("Another preview instance started. Terminating this preview instance.")
+            NSApplication.shared.terminate(nil)
+        }
     }
 
     @objc private func openKofi() {
@@ -256,16 +330,25 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         alert.runModal()
     }
 
+    @objc private func handlePreviewOnlyAction(_ sender: NSMenuItem) {
+        debugLog("Preview-only menu action selected: \(sender.title)")
+    }
+
     @objc private func changePosition(_ sender: NSMenuItem) {
         guard let position: NotificationPosition = sender.representedObject as? NotificationPosition else { return }
-        let oldPosition: NotificationPosition = currentPosition
-        currentPosition = position
-        UserDefaults.standard.set(position.rawValue, forKey: "notificationPosition")
+        setPosition(position)
+    }
 
-        sender.menu?.items.forEach { item in
-            item.state = (item.representedObject as? NotificationPosition) == position ? .on : .off
+    private func setPosition(_ position: NotificationPosition) {
+        let oldPosition = currentPosition
+        currentPosition = position
+        positionPickerView?.selectedPosition = position
+        if launchMode == .menuPreview {
+            debugLog("Preview position changed: \(oldPosition.displayName) → \(position.displayName)")
+            return
         }
 
+        UserDefaults.standard.set(position.rawValue, forKey: "notificationPosition")
         debugLog("Position changed: \(oldPosition.displayName) → \(position.displayName)")
         moveAllNotifications(reason: "changePosition")
     }

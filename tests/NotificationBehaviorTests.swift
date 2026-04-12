@@ -149,6 +149,48 @@ private func testInitialPositionInBounds() throws {
     try assertEqual(result.padding, 20, "initial in-bounds padding")
 }
 
+private func testLaunchModeDefaultsToFull() throws {
+    try assertEqual(
+        PingPlaceLaunchMode.detect(arguments: ["PingPlace"], environment: [:]),
+        .full,
+        "default launch mode should be full"
+    )
+}
+
+private func testLaunchModeUsesArgumentForPreview() throws {
+    try assertEqual(
+        PingPlaceLaunchMode.detect(arguments: ["PingPlace", "--menu-preview"], environment: [:]),
+        .menuPreview,
+        "menu preview argument should enable preview mode"
+    )
+}
+
+private func testLaunchModeUsesEnvironmentForPreview() throws {
+    try assertEqual(
+        PingPlaceLaunchMode.detect(arguments: ["PingPlace"], environment: ["PINGPLACE_MENU_PREVIEW": "true"]),
+        .menuPreview,
+        "menu preview environment flag should enable preview mode"
+    )
+}
+
+private func testMenuPreviewIPCDoesNotTerminateSameProcess() throws {
+    let userInfo = PingPlaceMenuPreviewIPC.terminationUserInfo(senderProcessID: 4242)
+    try assertEqual(
+        PingPlaceMenuPreviewIPC.shouldTerminatePreview(currentProcessID: 4242, userInfo: userInfo),
+        false,
+        "preview IPC should ignore termination requests sent by the same process"
+    )
+}
+
+private func testMenuPreviewIPCTerminatesDifferentProcess() throws {
+    let userInfo = PingPlaceMenuPreviewIPC.terminationUserInfo(senderProcessID: 4242)
+    try assertEqual(
+        PingPlaceMenuPreviewIPC.shouldTerminatePreview(currentProcessID: 9898, userInfo: userInfo),
+        true,
+        "preview IPC should terminate older preview instances"
+    )
+}
+
 private func testInitialPositionRecomputedWhenOutOfBounds() throws {
     let result = NotificationGeometry.effectiveInitialPosition(
         position: CGPoint(x: 1900, y: 100),
@@ -207,6 +249,44 @@ private func testPlacementForAllNotificationPositions() throws {
         try assertEqual(result.x, expectedX, "\(position.displayName) x")
         try assertEqual(result.y, expectedY, "\(position.displayName) y")
     }
+}
+
+private func testGridLayoutReturnsExpectedPositionForTopLeftCell() throws {
+    try assertEqual(
+        NotificationPositionGridLayout.position(row: 0, column: 0),
+        .topLeft,
+        "grid top-left cell should map to top left"
+    )
+}
+
+private func testGridLayoutReturnsExpectedPositionForCenterCell() throws {
+    try assertEqual(
+        NotificationPositionGridLayout.position(row: 1, column: 1),
+        .deadCenter,
+        "grid center cell should map to middle"
+    )
+}
+
+private func testGridLayoutReturnsExpectedPositionForBottomRightCell() throws {
+    try assertEqual(
+        NotificationPositionGridLayout.position(row: 2, column: 2),
+        .bottomRight,
+        "grid bottom-right cell should map to bottom right"
+    )
+}
+
+private func testGridLayoutReturnsNilForOutOfBoundsCell() throws {
+    try assertEqual(
+        NotificationPositionGridLayout.position(row: 9, column: 9),
+        nil,
+        "out-of-bounds grid cell should return nil"
+    )
+}
+
+private func testGridLayoutReturnsExpectedGridIndexForMiddleRight() throws {
+    let gridIndex = NotificationPositionGridLayout.gridIndex(for: .middleRight)
+    try assertEqual(gridIndex.row, 1, "middle-right row")
+    try assertEqual(gridIndex.column, 2, "middle-right column")
 }
 
 private func testMoveDecisionSkipsWidgetWindows() throws {
@@ -1076,8 +1156,18 @@ struct NotificationBehaviorTestRunner {
         let tests: [(String, () throws -> Void)] = [
             ("initial position in bounds", testInitialPositionInBounds),
             ("initial position overflow", testInitialPositionRecomputedWhenOutOfBounds),
+            ("launch mode defaults to full", testLaunchModeDefaultsToFull),
+            ("launch mode uses argument for preview", testLaunchModeUsesArgumentForPreview),
+            ("launch mode uses environment for preview", testLaunchModeUsesEnvironmentForPreview),
+            ("menu preview IPC ignores same-process termination", testMenuPreviewIPCDoesNotTerminateSameProcess),
+            ("menu preview IPC terminates different process", testMenuPreviewIPCTerminatesDifferentProcess),
             ("dead-center placement", testDeadCenterPlacement),
             ("placement for all notification positions", testPlacementForAllNotificationPositions),
+            ("grid layout returns top-left cell", testGridLayoutReturnsExpectedPositionForTopLeftCell),
+            ("grid layout returns center cell", testGridLayoutReturnsExpectedPositionForCenterCell),
+            ("grid layout returns bottom-right cell", testGridLayoutReturnsExpectedPositionForBottomRightCell),
+            ("grid layout returns nil for out-of-bounds cell", testGridLayoutReturnsNilForOutOfBoundsCell),
+            ("grid layout returns index for middle-right", testGridLayoutReturnsExpectedGridIndexForMiddleRight),
             ("move decision skips widget windows", testMoveDecisionSkipsWidgetWindows),
             ("move decision skips focused windows", testMoveDecisionSkipsFocusedWindows),
             ("move decision allows regular banners", testMoveDecisionAllowsRegularBanners),
