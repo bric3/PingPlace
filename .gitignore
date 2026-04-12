@@ -1,2 +1,4 @@
 PingPlace.app
 PingPlace.app.tar.gz
+.build/
+.codesign_identity
