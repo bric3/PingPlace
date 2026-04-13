@@ -43,13 +43,14 @@ For local development, debugging, and test workflows, see `CONTRIBUTING.md`.
 - macOS 14 or later
 - Accessibility permissions
 
-## Support
-
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/wadegrimridge)
-<a href="https://www.buymeacoffee.com/wadegrimridge" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 41px !important;width: 174px !important;"></a>
-
-Follow [@WadeGrimridge](https://x.com/WadeGrimridge) on X
-
 ## License
 
-© 2025 All rights reserved.
+Original app by [Wade Grimridge](https://github.com/NotWadeGrimridge/PingPlace).
+
+Fork and later evolutions by bric3.
+
+Original work © 2025 Wade Grimridge.
+
+Fork changes © 2026 bric3.
+
+All rights reserved.

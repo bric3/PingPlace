@@ -289,20 +289,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         menu.addItem(hideMenuBarIconItem)
         menu.addItem(NSMenuItem.separator())
 
-        let donateMenu = NSMenuItem(title: "Donate", action: nil, keyEquivalent: "")
-        let donateSubmenu = NSMenu()
-        let kofiItem = NSMenuItem(title: "Ko-fi", action: #selector(openKofi), keyEquivalent: "")
-        let buyMeACoffeeItem = NSMenuItem(title: "Buy Me a Coffee", action: #selector(openBuyMeACoffee), keyEquivalent: "")
-        if launchMode == .menuPreview {
-            kofiItem.action = #selector(handlePreviewOnlyAction(_:))
-            buyMeACoffeeItem.action = #selector(handlePreviewOnlyAction(_:))
-        }
-        donateSubmenu.addItem(kofiItem)
-        donateSubmenu.addItem(buyMeACoffeeItem)
-        donateMenu.submenu = donateSubmenu
-
         menu.addItem(NSMenuItem(title: "About", action: #selector(showAbout), keyEquivalent: ""))
-        menu.addItem(donateMenu)
         let quitTitle: String
         switch launchMode {
         case .menuPreview:
@@ -354,14 +341,6 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             self?.debugLog("Another \(modeDescription) PingPlace instance started. Terminating this instance.")
             NSApplication.shared.terminate(nil)
         }
-    }
-
-    @objc private func openKofi() {
-        NSWorkspace.shared.open(URL(string: "https://ko-fi.com/wadegrimridge")!)
-    }
-
-    @objc private func openBuyMeACoffee() {
-        NSWorkspace.shared.open(URL(string: "https://www.buymeacoffee.com/wadegrimridge")!)
     }
 
     @objc private func toggleMenuBarIcon(_: NSMenuItem) {
@@ -717,7 +696,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         aboutWindow.title = "About PingPlace"
         aboutWindow.delegate = self
 
-        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 180))
+        let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
 
         let version: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "N/A"
         let copyright: String = Bundle.main.infoDictionary?["NSHumanReadableCopyright"] as? String ?? ""
@@ -726,8 +705,8 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             (createIconView(), 165),
             (createLabel("PingPlace", font: .boldSystemFont(ofSize: 16)), 110),
             (createLabel("Version \(version)"), 90),
-            (createLabel("Made with <3 by Wade"), 70),
-            (createTwitterButton(), 40),
+            (createLabel("Fork and later evolutions by bric3"), 70),
+            (createOriginalAppLinkButton(), 50),
             (createLabel(copyright, color: .secondaryLabelColor, size: 11), 20),
         ]
 
@@ -761,22 +740,22 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         return label
     }
 
-    private func createTwitterButton() -> NSButton {
+    private func createOriginalAppLinkButton() -> NSButton {
         let button = NSButton()
-        button.title = "@WadeGrimridge"
+        button.title = "Original app by Wade Grimridge"
         button.bezelStyle = .inline
         button.isBordered = false
         button.target = self
-        button.action = #selector(openTwitter)
-        button.attributedTitle = NSAttributedString(string: "@WadeGrimridge", attributes: [
+        button.action = #selector(openOriginalRepository)
+        button.attributedTitle = NSAttributedString(string: "Original app by Wade Grimridge", attributes: [
             .foregroundColor: NSColor.linkColor,
             .underlineStyle: NSUnderlineStyle.single.rawValue,
         ])
         return button
     }
 
-    @objc private func openTwitter() {
-        NSWorkspace.shared.open(URL(string: "https://x.com/WadeGrimridge")!)
+    @objc private func openOriginalRepository() {
+        NSWorkspace.shared.open(URL(string: "https://github.com/NotWadeGrimridge/PingPlace")!)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
