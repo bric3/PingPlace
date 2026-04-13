@@ -2,11 +2,20 @@
 
 Control notification position on macOS.
 
-**Note: macOS 26 users can use [@sk0gen](https://github.com/sk0gen)'s build for the time being, [download here](https://github.com/sk0gen/PingPlace/releases/download/v1.3.2/PingPlace.app.tar.gz)!**
-
-![image](https://github.com/user-attachments/assets/469b318f-eba5-464f-87be-74d3decaa8a2)
+| Menu | Notification moved |
+| --- | --- |
+| ![PingPlace menu](.github/menu-screenshot.png) | ![Notification moved to top left](.github/moved-notification-to-top-left.png) |
 
 As seen in [Lifehacker](https://lifehacker.com/tech/change-where-macos-notifications-show-up)
+
+## Fork changes
+
+- Handles system sleep and lid close
+- External monitors plug/unplug, including different resolutions
+- Notification Center handling when swiping right to left or toggling it
+- Recovery mechanisms for delayed notification availability
+- New menu with a visual position picker
+- Split code into smaller components and added tests
 
 ## Installation
 
