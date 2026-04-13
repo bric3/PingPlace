@@ -6,10 +6,14 @@ final class NotificationPositionPickerView: NSView {
         static let titleHeight: CGFloat = 18
         static let statusHeight: CGFloat = 16
         static let verticalSpacing: CGFloat = 8
-        static let gridSize = CGSize(width: 144, height: 144)
+        static let gridHeight: CGFloat = 144
+        static let gridSize = NotificationPositionGridLayout.screenGridSize(forHeight: gridHeight)
         static let cellSpacing: CGFloat = 6
-        static let preferredSize = CGSize(width: 220, height: 230)
-        static let indicatorSize = CGSize(width: 20, height: 11)
+        static let preferredSize = CGSize(
+            width: contentInsets.left + gridSize.width + 12,
+            height: 230
+        )
+        static let indicatorSize = CGSize(width: 24, height: 13)
         static let indicatorInset: CGFloat = 8
     }
 

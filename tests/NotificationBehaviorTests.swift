@@ -1,23 +1,23 @@
 import CoreGraphics
 import Foundation
 
-private enum TestFailure: Error {
+enum TestFailure: Error {
     case assertionFailed(String)
 }
 
-private func assertEqual<T: Equatable>(_ actual: T, _ expected: T, _ label: String) throws {
+func assertEqual<T: Equatable>(_ actual: T, _ expected: T, _ label: String) throws {
     if actual != expected {
         throw TestFailure.assertionFailed("\(label): expected \(expected), got \(actual)")
     }
 }
 
-private func assertEqual(_ actual: CGFloat, _ expected: CGFloat, _ label: String, epsilon: CGFloat = 0.0001) throws {
+func assertEqual(_ actual: CGFloat, _ expected: CGFloat, _ label: String, epsilon: CGFloat = 0.0001) throws {
     if abs(actual - expected) > epsilon {
         throw TestFailure.assertionFailed("\(label): expected \(expected), got \(actual)")
     }
 }
 
-private func assertTrue(_ condition: Bool, _ label: String) throws {
+func assertTrue(_ condition: Bool, _ label: String) throws {
     if !condition {
         throw TestFailure.assertionFailed("\(label): expected true")
     }
@@ -249,44 +249,6 @@ private func testPlacementForAllNotificationPositions() throws {
         try assertEqual(result.x, expectedX, "\(position.displayName) x")
         try assertEqual(result.y, expectedY, "\(position.displayName) y")
     }
-}
-
-private func testGridLayoutReturnsExpectedPositionForTopLeftCell() throws {
-    try assertEqual(
-        NotificationPositionGridLayout.position(row: 0, column: 0),
-        .topLeft,
-        "grid top-left cell should map to top left"
-    )
-}
-
-private func testGridLayoutReturnsExpectedPositionForCenterCell() throws {
-    try assertEqual(
-        NotificationPositionGridLayout.position(row: 1, column: 1),
-        .deadCenter,
-        "grid center cell should map to middle"
-    )
-}
-
-private func testGridLayoutReturnsExpectedPositionForBottomRightCell() throws {
-    try assertEqual(
-        NotificationPositionGridLayout.position(row: 2, column: 2),
-        .bottomRight,
-        "grid bottom-right cell should map to bottom right"
-    )
-}
-
-private func testGridLayoutReturnsNilForOutOfBoundsCell() throws {
-    try assertEqual(
-        NotificationPositionGridLayout.position(row: 9, column: 9),
-        nil,
-        "out-of-bounds grid cell should return nil"
-    )
-}
-
-private func testGridLayoutReturnsExpectedGridIndexForMiddleRight() throws {
-    let gridIndex = NotificationPositionGridLayout.gridIndex(for: .middleRight)
-    try assertEqual(gridIndex.row, 1, "middle-right row")
-    try assertEqual(gridIndex.column, 2, "middle-right column")
 }
 
 private func testMoveDecisionSkipsWidgetWindows() throws {
@@ -1168,6 +1130,8 @@ struct NotificationBehaviorTestRunner {
             ("grid layout returns bottom-right cell", testGridLayoutReturnsExpectedPositionForBottomRightCell),
             ("grid layout returns nil for out-of-bounds cell", testGridLayoutReturnsNilForOutOfBoundsCell),
             ("grid layout returns index for middle-right", testGridLayoutReturnsExpectedGridIndexForMiddleRight),
+            ("grid layout uses screen-like aspect ratio", testGridLayoutUsesScreenLikeAspectRatio),
+            ("grid layout uses MacBook main display aspect ratio", testGridLayoutUsesMacBookMainDisplayAspectRatio),
             ("move decision skips widget windows", testMoveDecisionSkipsWidgetWindows),
             ("move decision skips focused windows", testMoveDecisionSkipsFocusedWindows),
             ("move decision allows regular banners", testMoveDecisionAllowsRegularBanners),
