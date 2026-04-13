@@ -1,6 +1,18 @@
 import CoreGraphics
 
 enum ScreenResolutionPolicy {
+    static func accessibilityRect(
+        from cocoaRect: CGRect,
+        globalTopEdge: CGFloat
+    ) -> CGRect {
+        CGRect(
+            x: cocoaRect.origin.x,
+            y: globalTopEdge - cocoaRect.maxY,
+            width: cocoaRect.width,
+            height: cocoaRect.height
+        )
+    }
+
     static func preferredScreen(
         target: NotificationDisplayTarget,
         screens: [ScreenDescriptor]

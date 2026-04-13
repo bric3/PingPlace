@@ -8,7 +8,8 @@ protocol NotificationCenterAXClient {
     func isFocused(_ element: AXUIElement) -> Bool
     func position(of element: AXUIElement) -> CGPoint?
     func size(of element: AXUIElement) -> CGSize?
-    func setPosition(_ element: AXUIElement, point: CGPoint)
+    @discardableResult
+    func setPosition(_ element: AXUIElement, point: CGPoint) -> AXError
     func firstElement(root: AXUIElement, targetSubroles: [String]) -> AXUIElement?
     func hasFocusedWindow(pid: pid_t) -> Bool
     func hasWidgetUI(pid: pid_t) -> Bool
@@ -74,10 +75,10 @@ struct SystemNotificationCenterAXClient: NotificationCenterAXClient {
         return size
     }
 
-    func setPosition(_ element: AXUIElement, point: CGPoint) {
+    func setPosition(_ element: AXUIElement, point: CGPoint) -> AXError {
         var point = point
         let value = AXValueCreate(.cgPoint, &point)!
-        AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value)
+        return AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, value)
     }
 
     func firstElement(root: AXUIElement, targetSubroles: [String]) -> AXUIElement? {

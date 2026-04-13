@@ -53,4 +53,15 @@ enum NotificationGeometry {
 
         return (newX, newY)
     }
+
+    static func correctedRootPosition(
+        currentRootPosition: CGPoint,
+        actualBannerPosition: CGPoint,
+        targetBannerPosition: CGPoint
+    ) -> CGPoint {
+        CGPoint(
+            x: currentRootPosition.x + (targetBannerPosition.x - actualBannerPosition.x),
+            y: currentRootPosition.y + (targetBannerPosition.y - actualBannerPosition.y)
+        )
+    }
 }

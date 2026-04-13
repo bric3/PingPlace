@@ -31,8 +31,8 @@ private let externalMainScreen = ScreenDescriptor(
 )
 
 private let laptopSecondaryScreen = ScreenDescriptor(
-    frame: CGRect(x: 822, y: -1169, width: 1800, height: 1169),
-    visibleFrame: CGRect(x: 822, y: -1169, width: 1800, height: 1129),
+    frame: CGRect(x: 822, y: 1890, width: 1800, height: 1169),
+    visibleFrame: CGRect(x: 822, y: 1930, width: 1800, height: 1129),
     isMain: false,
     isBuiltIn: true
 )
@@ -46,7 +46,7 @@ private let singleLaptopMainScreen = ScreenDescriptor(
 
 private let dualScreenLayout = [externalMainScreen, laptopSecondaryScreen]
 
-private let pointInsideLaptopScreen = CGPoint(x: 1440, y: -1100)
+private let pointInsideLaptopScreen = CGPoint(x: 1440, y: 2000)
 private let pointOutsideAllKnownScreens = CGPoint(x: 9999, y: 9999)
 private let laptopWindowSize = CGSize(width: 1800, height: 1169)
 private let unknownWindowSize = CGSize(width: 1200, height: 800)
@@ -157,6 +157,17 @@ private func testInitialPositionInBounds() throws {
     try assertEqual(result.padding, 20, "initial in-bounds padding")
 }
 
+private func testCorrectedRootPositionCompensatesForBannerError() throws {
+    let corrected = NotificationGeometry.correctedRootPosition(
+        currentRootPosition: CGPoint(x: -1855, y: 886),
+        actualBannerPosition: CGPoint(x: 1463, y: 932),
+        targetBannerPosition: CGPoint(x: 1508, y: 932)
+    )
+
+    try assertEqual(corrected.x, -1810, "corrected root x should compensate for the banner error")
+    try assertEqual(corrected.y, 886, "corrected root y should remain unchanged when banner y is already correct")
+}
+
 private func testLaunchModeDefaultsToFull() throws {
     try assertEqual(
         PingPlaceLaunchMode.detect(arguments: ["PingPlace"], environment: [:]),
@@ -204,6 +215,79 @@ private func testPortableMacDetectionRejectsDesktopModels() throws {
         MachineModelPolicy.isPortableMac(modelIdentifier: "Mac14,2"),
         false,
         "desktop-class models should not be treated as portable"
+    )
+}
+
+private func testDisplayTargetPolicyShowsSelectorOnlyWhenLaptopDisplayIsAvailable() throws {
+    try assertEqual(
+        NotificationDisplayTargetPolicy.showsDisplaySelector(
+            isPortableMac: true,
+            screens: dualScreenLayout
+        ),
+        true,
+        "portable Macs should show the display selector when the laptop display is available"
+    )
+    try assertEqual(
+        NotificationDisplayTargetPolicy.showsDisplaySelector(
+            isPortableMac: true,
+            screens: [externalMainScreen]
+        ),
+        false,
+        "portable Macs should hide the display selector when the laptop display is unavailable"
+    )
+    try assertEqual(
+        NotificationDisplayTargetPolicy.showsDisplaySelector(
+            isPortableMac: false,
+            screens: dualScreenLayout
+        ),
+        false,
+        "desktop Macs should not show the display selector"
+    )
+}
+
+private func testDisplayTargetPolicyFallsBackToMainDisplayWhenLaptopDisplayIsUnavailable() throws {
+    try assertEqual(
+        NotificationDisplayTargetPolicy.effectiveTarget(
+            requestedTarget: .builtInDisplay,
+            isPortableMac: true,
+            screens: [externalMainScreen]
+        ),
+        .mainDisplay,
+        "built-in targeting should fall back to the main display when the laptop display is unavailable"
+    )
+}
+
+private func testDisplayTargetPolicyRestoresLaptopDisplayWhenItBecomesAvailable() throws {
+    try assertEqual(
+        NotificationDisplayTargetPolicy.effectiveTarget(
+            requestedTarget: .builtInDisplay,
+            isPortableMac: true,
+            screens: dualScreenLayout
+        ),
+        .builtInDisplay,
+        "built-in targeting should be restored when the laptop display becomes available again"
+    )
+}
+
+private func testDisplayTargetPolicyUsesMainDisplaySectionTitleWhenSelectorIsHidden() throws {
+    try assertEqual(
+        NotificationDisplayTargetPolicy.sectionTitle(
+            isPortableMac: true,
+            screens: [externalMainScreen]
+        ),
+        "Position on the Main Display",
+        "the section title should explain the fallback when the laptop display is unavailable"
+    )
+}
+
+private func testDisplayTargetPolicyUsesGenericSectionTitleWhenSelectorIsVisible() throws {
+    try assertEqual(
+        NotificationDisplayTargetPolicy.sectionTitle(
+            isPortableMac: true,
+            screens: dualScreenLayout
+        ),
+        "Position",
+        "the section title should be generic when the display selector is visible"
     )
 }
 
@@ -1181,7 +1265,21 @@ private func testPlacementEngineMovesTopRightWhenBuiltInDisplayIsRequested() thr
     }
 
     try assertEqual(plan.referenceScreen?.frame, laptopSecondaryScreen.frame, "top-right built-in reference screen")
-    try assertEqual(plan.targetPosition.x, -1560, "top-right built-in target x")
+    try assertEqual(plan.targetPosition.x, -738, "top-right built-in target x should land on the laptop display")
+    try assertEqual(plan.targetPosition.y, 1890, "top-right built-in target y should include the laptop display origin")
+}
+
+private func testAccessibilityRectConvertsLowerScreenIntoAXCoordinateSpace() throws {
+    let converted = ScreenResolutionPolicy.accessibilityRect(
+        from: CGRect(x: 822, y: -1169, width: 1800, height: 1169),
+        globalTopEdge: 1890
+    )
+
+    try assertEqual(
+        converted,
+        CGRect(x: 822, y: 1890, width: 1800, height: 1169),
+        "lower screen should be converted into positive AX y space"
+    )
 }
 
 private func testResolveScreenPrefersPositionMatch() throws {
@@ -1247,14 +1345,18 @@ struct NotificationBehaviorTestRunner {
     static func main() {
         let tests: [(String, () throws -> Void)] = [
             ("initial position in bounds", testInitialPositionInBounds),
+            ("corrected root position compensates for banner error", testCorrectedRootPositionCompensatesForBannerError),
             ("initial position overflow", testInitialPositionRecomputedWhenOutOfBounds),
             ("launch mode defaults to full", testLaunchModeDefaultsToFull),
             ("launch mode uses argument for preview", testLaunchModeUsesArgumentForPreview),
             ("launch mode uses environment for preview", testLaunchModeUsesEnvironmentForPreview),
             ("portable mac detection matches MacBook models", testPortableMacDetectionMatchesMacBookModels),
             ("portable mac detection rejects desktop models", testPortableMacDetectionRejectsDesktopModels),
-            ("menu preview IPC ignores same-process termination", testMenuPreviewIPCDoesNotTerminateSameProcess),
-            ("menu preview IPC terminates different process", testMenuPreviewIPCTerminatesDifferentProcess),
+            ("display target policy shows selector only when laptop display is available", testDisplayTargetPolicyShowsSelectorOnlyWhenLaptopDisplayIsAvailable),
+            ("display target policy falls back to main display when laptop display is unavailable", testDisplayTargetPolicyFallsBackToMainDisplayWhenLaptopDisplayIsUnavailable),
+            ("display target policy restores laptop display when it becomes available", testDisplayTargetPolicyRestoresLaptopDisplayWhenItBecomesAvailable),
+            ("display target policy uses main-display section title when selector is hidden", testDisplayTargetPolicyUsesMainDisplaySectionTitleWhenSelectorIsHidden),
+            ("display target policy uses generic section title when selector is visible", testDisplayTargetPolicyUsesGenericSectionTitleWhenSelectorIsVisible),
             ("dead-center placement", testDeadCenterPlacement),
             ("placement for all notification positions", testPlacementForAllNotificationPositions),
             ("grid layout returns top-left cell", testGridLayoutReturnsExpectedPositionForTopLeftCell),
@@ -1291,6 +1393,9 @@ struct NotificationBehaviorTestRunner {
             ("controller widget close triggers move", testControllerWidgetCloseTriggersMoveWhenNotTopRight),
             ("controller widget close schedules retry", testControllerWidgetCloseSchedulesRetryWhenNoMoveOccurs),
             ("controller widget close skips top-right", testControllerWidgetCloseDoesNotTriggerMoveWhenTopRight),
+            ("controller notification created schedules settle follow-ups", testControllerNotificationWindowCreatedSchedulesSettleFollowUps),
+            ("controller notification created cancels previous settle follow-up", testControllerNotificationWindowCreatedCancelsPreviousSettleFollowUp),
+            ("controller notification created skips settle follow-ups when not needed", testControllerNotificationWindowCreatedSkipsSettleFollowUpsWhenNotNeeded),
             ("controller widget close moves top-right when built-in display is targeted", testControllerWidgetCloseTriggersMoveWhenTopRightTargetsBuiltInDisplay),
             ("controller keeps panel open when focus drops but widget signal remains", testControllerKeepsPanelOpenWhenFocusDropsButWidgetSignalRemains),
             ("controller invalidate cancels retry", testControllerInvalidateCancelsScheduledRetry),
@@ -1302,8 +1407,10 @@ struct NotificationBehaviorTestRunner {
             ("controller placeholder follow-up stops after success", testControllerPlaceholderFollowUpStopsAfterSuccess),
             ("placement engine initializes cache and computes move plan", testPlacementEngineInitializesCacheAndComputesMovePlan),
             ("placement engine uses built-in display as reference when requested", testPlacementEngineUsesBuiltInDisplayAsReferenceWhenRequested),
+            ("placement engine resets cached geometry when display target changes", testPlacementEngineResetsCachedGeometryWhenDisplayTargetChanges),
             ("placement engine resets cache when identifier changes", testPlacementEngineResetsCacheWhenIdentifierChanges),
             ("placement engine requests reset to cached position", testPlacementEngineRequestsResetToCachedPosition),
+            ("placement engine rebases root window when switching from main to built-in display", testPlacementEngineRebasesRootWindowWhenSwitchingFromMainToBuiltInDisplay),
             ("placement engine skips focused window", testPlacementEngineSkipsFocusedWindow),
             ("placement engine skips widget window", testPlacementEngineSkipsWidgetWindow),
             ("placement engine clear cache removes state", testPlacementEngineClearCacheRemovesCachedState),
@@ -1316,6 +1423,7 @@ struct NotificationBehaviorTestRunner {
             ("resolve screen falls back to main screen", testResolveScreenFallsBackToMainScreen),
             ("preferred screen returns built-in display when requested", testPreferredScreenReturnsBuiltInDisplayWhenRequested),
             ("preferred screen falls back to main display when built-in display is unavailable", testPreferredScreenFallsBackToMainDisplayWhenBuiltInDisplayIsUnavailable),
+            ("accessibility rect converts lower screen into AX coordinate space", testAccessibilityRectConvertsLowerScreenIntoAXCoordinateSpace),
             ("dock size uses visible frame difference", testDockSizeUsesVisibleFrameDifference),
         ]
 

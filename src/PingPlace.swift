@@ -121,7 +121,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     }
 
     func notificationDisplayTarget() -> NotificationDisplayTarget {
-        currentDisplayTarget
+        effectiveDisplayTarget()
     }
 
     func applicationDidFinishLaunching(_: Notification) {
@@ -196,6 +196,11 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
 
     private func createMenu() -> NSMenu {
         let menu = NSMenu()
+        let screens = currentScreenDescriptors()
+        let showsDisplaySelector = NotificationDisplayTargetPolicy.showsDisplaySelector(
+            isPortableMac: isPortableMac,
+            screens: screens
+        )
 
         if launchMode == .menuPreview {
             let previewInfoItem = NSMenuItem(title: "Preview", action: nil, keyEquivalent: "")
@@ -208,11 +213,18 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             menu.addItem(NSMenuItem.separator())
         }
 
-        let positionSectionTitleItem = NSMenuItem(title: "Notification Position", action: nil, keyEquivalent: "")
+        let positionSectionTitleItem = NSMenuItem(
+            title: NotificationDisplayTargetPolicy.sectionTitle(
+                isPortableMac: isPortableMac,
+                screens: screens
+            ),
+            action: nil,
+            keyEquivalent: ""
+        )
         positionSectionTitleItem.isEnabled = false
         menu.addItem(positionSectionTitleItem)
 
-        if isPortableMac {
+        if showsDisplaySelector {
             let displayTargetPickerItem = NSMenuItem()
             let pickerView = NotificationDisplayTargetPickerView(selectedTarget: currentDisplayTarget) { [weak self] target in
                 self?.setDisplayTarget(target)
@@ -398,17 +410,22 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     }
 
     private enum WindowMoveResult {
-        case moved
+        case moved(needsSettleFollowUp: Bool)
         case noBannerContainer
         case nonMovableCandidate
     }
 
     func moveNotification(_ window: AXUIElement) -> Bool {
-        moveNotificationResult(window) == .moved
+        if case .moved = moveNotificationResult(window) {
+            return true
+        }
+        return false
     }
 
     private func moveNotificationResult(_ window: AXUIElement) -> WindowMoveResult {
-        guard currentPosition != .topRight || currentDisplayTarget != .mainDisplay else { return .nonMovableCandidate }
+        let requestedDisplayTarget = currentDisplayTarget
+        let displayTarget = effectiveDisplayTarget()
+        guard currentPosition != .topRight || displayTarget != .mainDisplay else { return .nonMovableCandidate }
 
         let windowIdentifier = axClient.windowIdentifier(window)
         let focusedWindow = axClient.isFocused(window)
@@ -463,7 +480,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         let evaluation = placementEngine.evaluateMove(
             snapshot: snapshot,
             currentPosition: currentPosition,
-            displayTarget: currentDisplayTarget,
+            displayTarget: displayTarget,
             screens: currentScreenDescriptors()
         )
 
@@ -492,10 +509,14 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
 
             debugLog(
                 "Window candidate: " +
+                    "requestedTarget=\(requestedDisplayTarget.displayName), " +
+                    "effectiveTarget=\(displayTarget.displayName), " +
                     "root=\(windowFingerprint(window: window, identifier: windowIdentifier, focused: focusedWindow, windowSize: resolvedWindowSize, notifPosition: windowPosition)), " +
                     "banner=\(elementFingerprint(resolvedBannerContainer, identifier: bannerIdentifier, focused: bannerFocused, size: resolvedNotifSize, position: resolvedPosition)), " +
                     "resolvedScreen=\(screenSummary(from: plan.resolvedScreen)), " +
-                    "referenceScreen=\(screenSummary(from: plan.referenceScreen))"
+                    "referenceScreen=\(screenSummary(from: plan.referenceScreen)), " +
+                    "targetPosition=\(pointSummary(plan.targetPosition)), " +
+                    "targetBannerPosition=\(pointSummary(plan.targetBannerPosition))"
             )
 
             if plan.initialPositionRecalculated {
@@ -504,10 +525,6 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             if plan.cacheInitialized, let cache = placementEngine.cache {
                 debugLog("Initial notification cached - size: \(cache.initialNotificationSize), position: \(cache.initialPosition), padding: \(cache.initialPadding)")
             }
-            if let resetPosition = plan.resetPosition {
-                axClient.setPosition(window, point: resetPosition)
-            }
-
             let cache = placementEngine.cache!
             let dockSize = plan.referenceScreen.map(ScreenResolutionPolicy.dockSize(for:)) ?? 0
             let newPosition = calculateNewPosition(
@@ -517,15 +534,75 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
                 padding: cache.initialPadding,
                 dockSize: dockSize
             )
-            axClient.setPosition(window, point: plan.targetPosition)
+            var movedElementSummary: String
+            let bannerMoveResult = axClient.setPosition(resolvedBannerContainer, point: plan.targetBannerPosition)
+            var postMoveRootPosition = axClient.position(of: window)
+            var postMoveBannerPosition = axClient.position(of: resolvedBannerContainer)
+            let bannerMoveApplied = bannerMoveResult == .success &&
+                postMoveBannerPosition.map { bannerPosition in
+                    abs(bannerPosition.x - plan.targetBannerPosition.x) < 1 &&
+                    abs(bannerPosition.y - plan.targetBannerPosition.y) < 1
+                } == true
+
+            if bannerMoveApplied {
+                movedElementSummary = "banner"
+            } else {
+                let fallbackReason = "banner:\(bannerMoveResult.rawValue)"
+                _ = axClient.setPosition(window, point: plan.targetPosition)
+                postMoveRootPosition = axClient.position(of: window)
+                postMoveBannerPosition = axClient.position(of: resolvedBannerContainer)
+                movedElementSummary = "root(fallback:\(fallbackReason))"
+
+                if let currentRootPosition = postMoveRootPosition,
+                   let currentBannerPosition = postMoveBannerPosition
+                {
+                    let needsCorrection =
+                        abs(currentBannerPosition.x - plan.targetBannerPosition.x) > 1 ||
+                        abs(currentBannerPosition.y - plan.targetBannerPosition.y) > 1
+
+                    if needsCorrection {
+                        let correctedRootPosition = NotificationGeometry.correctedRootPosition(
+                            currentRootPosition: currentRootPosition,
+                            actualBannerPosition: currentBannerPosition,
+                            targetBannerPosition: plan.targetBannerPosition
+                        )
+                        debugLog(
+                            "Applying root correction: " +
+                                "currentRoot=\(pointSummary(currentRootPosition)), " +
+                                "actualBanner=\(pointSummary(currentBannerPosition)), " +
+                                "targetBanner=\(pointSummary(plan.targetBannerPosition)), " +
+                                "correctedRoot=\(pointSummary(correctedRootPosition))"
+                        )
+                        _ = axClient.setPosition(window, point: correctedRootPosition)
+                        postMoveRootPosition = axClient.position(of: window)
+                        postMoveBannerPosition = axClient.position(of: resolvedBannerContainer)
+                        movedElementSummary += "+corrected"
+                    }
+                }
+            }
+
+            let bannerWithinReferenceScreen = plan.referenceScreen.map {
+                $0.frame.contains(postMoveBannerPosition ?? .zero)
+            } ?? false
             controller.noteNotificationMoved()
+            debugLog(
+                "Post-move verification: " +
+                    "movedElement=\(movedElementSummary), " +
+                    "rootPos=\(optionalPointSummary(postMoveRootPosition)), " +
+                    "bannerPos=\(optionalPointSummary(postMoveBannerPosition)), " +
+                    "bannerWithinReferenceScreen=\(bannerWithinReferenceScreen)"
+            )
             debugLog(
                 "Moved notification to \(currentPosition.displayName) at (\(newPosition.x), \(newPosition.y)) " +
                     "from root=\(windowFingerprint(window: window, identifier: windowIdentifier, focused: focusedWindow, windowSize: resolvedWindowSize, notifPosition: windowPosition)), " +
                     "banner=\(elementFingerprint(resolvedBannerContainer, identifier: bannerIdentifier, focused: bannerFocused, size: resolvedNotifSize, position: resolvedPosition)), " +
                     "referenceScreen=\(screenSummary(from: plan.referenceScreen))"
             )
-            return .moved
+            let needsSettleFollowUp = postMoveBannerPosition.map {
+                abs($0.x - plan.targetBannerPosition.x) > 1 ||
+                    abs($0.y - plan.targetBannerPosition.y) > 1
+            } ?? true
+            return .moved(needsSettleFollowUp: needsSettleFollowUp)
         }
     }
 
@@ -665,7 +742,15 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     }
 
     func notificationCenterWindowCreated(_ element: AXUIElement) {
-        _ = moveNotification(element)
+        let moveResult = moveNotificationResult(element)
+        let needsSettleFollowUp: Bool
+        switch moveResult {
+        case let .moved(shouldSettle):
+            needsSettleFollowUp = shouldSettle
+        case .noBannerContainer, .nonMovableCandidate:
+            needsSettleFollowUp = false
+        }
+        controller.handleNotificationWindowCreated(needsSettleFollowUp: needsSettleFollowUp)
     }
 
     func notificationCenterStateMonitorTick() {
@@ -674,12 +759,14 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
 
     func screenParametersChanged() {
         DispatchQueue.main.async {
+            self.refreshMenu()
             self.controller.handleScreenConfigurationChanged()
         }
     }
 
     func sessionDidBecomeActive() {
         DispatchQueue.main.async {
+            self.refreshMenu()
             self.controller.handleSessionDidBecomeActive()
         }
     }
@@ -690,6 +777,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
 
     func systemDidWake() {
         DispatchQueue.main.async {
+            self.refreshMenu()
             self.controller.handleWake()
         }
     }
@@ -717,19 +805,83 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     }
 
     private func currentScreenDescriptors() -> [ScreenDescriptor] {
-        NSScreen.screens.map { screen in
+        let screens = NSScreen.screens
+        let globalTopEdge = screens.map(\.frame.maxY).max() ?? 0
+
+        return screens.map { screen in
             ScreenDescriptor(
-                frame: screen.frame,
-                visibleFrame: screen.visibleFrame,
+                frame: ScreenResolutionPolicy.accessibilityRect(
+                    from: screen.frame,
+                    globalTopEdge: globalTopEdge
+                ),
+                visibleFrame: ScreenResolutionPolicy.accessibilityRect(
+                    from: screen.visibleFrame,
+                    globalTopEdge: globalTopEdge
+                ),
                 isMain: screen == NSScreen.main,
                 isBuiltIn: isBuiltInScreen(screen)
             )
         }
     }
 
-    private func screen(from descriptor: ScreenDescriptor?) -> NSScreen? {
-        guard let descriptor else { return nil }
-        return NSScreen.screens.first(where: { $0.frame == descriptor.frame && $0.visibleFrame == descriptor.visibleFrame })
+    private func effectiveDisplayTarget() -> NotificationDisplayTarget {
+        NotificationDisplayTargetPolicy.effectiveTarget(
+            requestedTarget: currentDisplayTarget,
+            isPortableMac: isPortableMac,
+            screens: currentScreenDescriptors()
+        )
+    }
+
+    private func refreshMenu() {
+        guard statusItem != nil else { return }
+        statusItem?.menu = createMenu()
+    }
+
+        if loadedDisplayTarget != currentDisplayTarget {
+            let oldTarget = currentDisplayTarget
+            currentDisplayTarget = loadedDisplayTarget
+            displayTargetPickerView?.selectedTarget = loadedDisplayTarget
+            debugLog("Settings file changed display target: \(oldTarget.displayName) → \(loadedDisplayTarget.displayName)")
+            clearCachedNotificationGeometry()
+            shouldMoveNotifications = true
+        }
+
+        refreshMenu()
+
+        if shouldMoveNotifications, launchMode != .menuPreview {
+            moveAllNotifications(reason: "settingsFileChanged")
+        }
+    }
+
+    private func loadedNotificationPosition() -> NotificationPosition {
+        guard let rawValue = settings.string(forKey: .notificationPosition),
+              let position = NotificationPosition(rawValue: rawValue)
+        else {
+            return .topMiddle
+        }
+        return position
+    }
+
+    private func loadedNotificationDisplayTarget() -> NotificationDisplayTarget {
+        guard let rawValue = settings.string(forKey: .notificationDisplayTarget),
+              let target = NotificationDisplayTarget(rawValue: rawValue)
+        else {
+            return .mainDisplay
+        }
+        return target
+    }
+
+    private func effectiveDisplayTarget() -> NotificationDisplayTarget {
+        NotificationDisplayTargetPolicy.effectiveTarget(
+            requestedTarget: currentDisplayTarget,
+            isPortableMac: isPortableMac,
+            screens: currentScreenDescriptors()
+        )
+    }
+
+    private func refreshMenu() {
+        guard statusItem != nil else { return }
+        statusItem?.menu = createMenu()
     }
 
     private func windowFingerprint(
@@ -807,8 +959,10 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     }
 
     private func screenSummary(from descriptor: ScreenDescriptor?) -> String {
-        let resolvedScreen = descriptor.flatMap { screen(from: $0) }
-        return screenSummary(from: resolvedScreen)
+        guard let descriptor else { return "n/a" }
+        let frame = rectSummary(descriptor.frame)
+        let visible = rectSummary(descriptor.visibleFrame)
+        return "{main=\(descriptor.isMain),builtIn=\(descriptor.isBuiltIn),frame=\(frame),visible=\(visible)}"
     }
 
     private func screenSummary(from screen: NSScreen?) -> String {
@@ -827,6 +981,10 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
 
     private func pointSummary(_ point: CGPoint) -> String {
         "\(Int(point.x.rounded())),\(Int(point.y.rounded()))"
+    }
+
+    private func optionalPointSummary(_ point: CGPoint?) -> String {
+        point.map(pointSummary) ?? "n/a"
     }
 
     func screenTopologySummary() -> String {

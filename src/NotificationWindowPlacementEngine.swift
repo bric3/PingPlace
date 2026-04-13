@@ -37,14 +37,15 @@ struct NotificationWindowCache: Equatable {
     let initialNotificationSize: CGSize
     let initialPadding: CGFloat
     let windowIdentifier: String?
+    let referenceScreenFrame: CGRect?
 }
 
 struct NotificationWindowMovePlan {
     let cacheResetIdentifiers: (previous: String?, current: String?)?
     let initialPositionRecalculated: Bool
     let cacheInitialized: Bool
-    let resetPosition: CGPoint?
     let targetPosition: CGPoint
+    let targetBannerPosition: CGPoint
     let resolvedScreen: ScreenDescriptor?
     let referenceScreen: ScreenDescriptor?
 }
@@ -98,21 +99,30 @@ final class NotificationWindowPlacementEngine {
         )
         let targetScreen = ScreenResolutionPolicy.preferredScreen(target: displayTarget, screens: screens) ?? resolvedScreen
 
+        if cache?.referenceScreenFrame != targetScreen?.frame {
+            cache = nil
+        }
+
+        let localNotificationPosition = CGPoint(
+            x: snapshot.notificationPosition.x - snapshot.rootWindowPosition.x,
+            y: snapshot.notificationPosition.y - snapshot.rootWindowPosition.y
+        )
+
         let cacheInitialized: Bool
         let initialPositionRecalculated: Bool
         if cache == nil {
-            let resolvedScreenWidth = resolvedScreen?.frame.width ?? snapshot.windowSize.width
             let geometry = NotificationGeometry.effectiveInitialPosition(
-                position: snapshot.notificationPosition,
+                position: localNotificationPosition,
                 notifSize: snapshot.notificationSize,
-                screenWidth: resolvedScreenWidth
+                screenWidth: snapshot.windowSize.width
             )
             cache = NotificationWindowCache(
                 initialPosition: geometry.position,
                 initialWindowSize: snapshot.windowSize,
                 initialNotificationSize: snapshot.notificationSize,
                 initialPadding: geometry.padding,
-                windowIdentifier: snapshot.identifier
+                windowIdentifier: snapshot.identifier,
+                referenceScreenFrame: targetScreen?.frame
             )
             cacheInitialized = true
             initialPositionRecalculated = geometry.position != snapshot.notificationPosition
@@ -122,7 +132,6 @@ final class NotificationWindowPlacementEngine {
         }
 
         let cache = cache!
-        let resetPosition = snapshot.notificationPosition != cache.initialPosition ? cache.initialPosition : nil
         let referenceScreen = targetScreen
         let targetWindowSize = referenceScreen.map(\.frame.size) ?? cache.initialWindowSize
         let dockSize = referenceScreen.map(ScreenResolutionPolicy.dockSize(for:)) ?? 0
@@ -136,13 +145,21 @@ final class NotificationWindowPlacementEngine {
             paddingAboveDock: paddingAboveDock
         )
 
+        let targetRootPosition = CGPoint(
+            x: target.x + (referenceScreen?.frame.origin.x ?? 0),
+            y: target.y + (referenceScreen?.frame.origin.y ?? 0)
+        )
+
         return .move(
             NotificationWindowMovePlan(
                 cacheResetIdentifiers: cacheResetIdentifiers,
                 initialPositionRecalculated: initialPositionRecalculated,
                 cacheInitialized: cacheInitialized,
-                resetPosition: resetPosition,
-                targetPosition: CGPoint(x: target.x, y: target.y),
+                targetPosition: targetRootPosition,
+                targetBannerPosition: CGPoint(
+                    x: targetRootPosition.x + localNotificationPosition.x,
+                    y: targetRootPosition.y + localNotificationPosition.y
+                ),
                 resolvedScreen: resolvedScreen,
                 referenceScreen: referenceScreen
             )

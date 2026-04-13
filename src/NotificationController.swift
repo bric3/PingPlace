@@ -28,9 +28,11 @@ final class NotificationController {
     private let recoveryRetryLimit: Int
     private let placeholderFollowUpInterval: TimeInterval
     private let placeholderFollowUpLimit: Int
+    private let notificationSettleIntervals: [TimeInterval]
 
     private var recoveryRetryTask: ScheduledNotificationAction?
     private var placeholderFollowUpTask: ScheduledNotificationAction?
+    private var notificationSettleTask: ScheduledNotificationAction?
     private var lastWidgetWindowCount: Int = 0
     private var pollingEndTime: Date?
     private var recoveryRetryAttempt: Int = 0
@@ -44,7 +46,8 @@ final class NotificationController {
         recoveryRetryInterval: TimeInterval,
         recoveryRetryLimit: Int,
         placeholderFollowUpInterval: TimeInterval = 30,
-        placeholderFollowUpLimit: Int = 60
+        placeholderFollowUpLimit: Int = 60,
+        notificationSettleIntervals: [TimeInterval] = [0.2, 0.6]
     ) {
         self.delegate = delegate
         self.scheduler = scheduler
@@ -52,6 +55,7 @@ final class NotificationController {
         self.recoveryRetryLimit = recoveryRetryLimit
         self.placeholderFollowUpInterval = placeholderFollowUpInterval
         self.placeholderFollowUpLimit = placeholderFollowUpLimit
+        self.notificationSettleIntervals = notificationSettleIntervals
     }
 
     func noteNotificationMoved() {
@@ -113,6 +117,13 @@ final class NotificationController {
         lastWidgetWindowCount = currentNCState
     }
 
+    func handleNotificationWindowCreated(needsSettleFollowUp: Bool) {
+        notificationSettleTask?.cancel()
+        notificationSettleTask = nil
+        guard needsSettleFollowUp else { return }
+        scheduleNotificationSettle(at: 0)
+    }
+
     private func shouldMoveForCurrentDisplayTarget(_ delegate: NotificationControllerDelegate) -> Bool {
         !(delegate.notificationPosition() == .topRight && delegate.notificationDisplayTarget() == .mainDisplay)
     }
@@ -122,6 +133,23 @@ final class NotificationController {
         recoveryRetryTask = nil
         placeholderFollowUpTask?.cancel()
         placeholderFollowUpTask = nil
+        notificationSettleTask?.cancel()
+        notificationSettleTask = nil
+    }
+
+    private func scheduleNotificationSettle(at index: Int) {
+        guard let delegate, index < notificationSettleIntervals.count else {
+            notificationSettleTask = nil
+            return
+        }
+
+        let interval = notificationSettleIntervals[index]
+        delegate.debugLog("Scheduling notification settle follow-up \(index + 1)/\(notificationSettleIntervals.count) in \(interval)s.")
+        notificationSettleTask = scheduler.schedule(after: interval) { [weak self] in
+            guard let self, let delegate = self.delegate else { return }
+            _ = delegate.moveAllNotifications(reason: "notificationWindowCreated-settle\(index + 1)")
+            self.scheduleNotificationSettle(at: index + 1)
+        }
     }
 
     private func triggerRecoveryReposition(reason: String) {
