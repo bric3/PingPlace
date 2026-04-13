@@ -1,21 +1,31 @@
 import AppKit
 import Foundation
 
-enum PingPlaceMenuPreviewIPC {
-    static let terminatePreviewNotification = Notification.Name("com.grimridge.PingPlace.menuPreview.terminate")
+enum PingPlaceInstanceIPC {
+    static let terminateInstanceNotification = Notification.Name("com.grimridge.PingPlace.instance.terminate")
     static let senderProcessIDKey = "senderProcessID"
+    static let launchModeKey = "launchMode"
 
-    static func terminationUserInfo(senderProcessID: Int32) -> [String: String] {
-        [senderProcessIDKey: String(senderProcessID)]
+    static func terminationUserInfo(senderProcessID: Int32, launchMode: PingPlaceLaunchMode) -> [String: String] {
+        [
+            senderProcessIDKey: String(senderProcessID),
+            launchModeKey: launchMode.rawValue,
+        ]
     }
 
-    static func shouldTerminatePreview(currentProcessID: Int32, userInfo: [AnyHashable: Any]?) -> Bool {
+    static func shouldTerminateInstance(
+        currentProcessID: Int32,
+        currentLaunchMode: PingPlaceLaunchMode,
+        userInfo: [AnyHashable: Any]?
+    ) -> Bool {
         guard let rawSenderProcessID = userInfo?[senderProcessIDKey] as? String,
-              let senderProcessID = Int32(rawSenderProcessID)
+              let senderProcessID = Int32(rawSenderProcessID),
+              let rawLaunchMode = userInfo?[launchModeKey] as? String,
+              let launchMode = PingPlaceLaunchMode(rawValue: rawLaunchMode)
         else {
-            return true
+            return false
         }
 
-        return senderProcessID != currentProcessID
+        return senderProcessID != currentProcessID && launchMode == currentLaunchMode
     }
 }

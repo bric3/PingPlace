@@ -57,11 +57,16 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     ]
     private let paddingAboveDock: CGFloat = 30
     private var statusItem: NSStatusItem?
-    private var isMenuBarIconHidden: Bool = UserDefaults.standard.bool(forKey: "isMenuBarIconHidden")
-    private let launchMode = PingPlaceLaunchMode.detect(arguments: CommandLine.arguments, environment: ProcessInfo.processInfo.environment)
+    private let runtimeConfiguration = PingPlaceRuntimeConfiguration.detect(
+        arguments: CommandLine.arguments,
+        environment: ProcessInfo.processInfo.environment
+    )
+    private var launchMode: PingPlaceLaunchMode { runtimeConfiguration.launchMode }
+    private lazy var settings = PingPlaceSettings(source: runtimeConfiguration.settingsSource)
+    private lazy var isMenuBarIconHidden: Bool = settings.bool(forKey: .isMenuBarIconHidden)
     private let logger: Logger = .init(subsystem: "com.grimridge.PingPlace", category: "NotificationMover")
-    private let debugMode: Bool = {
-        if let explicitDebugMode = UserDefaults.standard.object(forKey: "debugMode") as? Bool {
+    private lazy var debugMode: Bool = {
+        if let explicitDebugMode = settings.object(forKey: .debugMode) as? Bool {
             return explicitDebugMode
         }
         #if PINGPLACE_DEBUG_BUILD
@@ -75,18 +80,20 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     private let isPortableMac = MachineModelPolicy.currentModelIdentifier().map { MachineModelPolicy.isPortableMac(modelIdentifier: $0) } ?? false
     private weak var displayTargetPickerView: NotificationDisplayTargetPickerView?
     private weak var positionPickerView: NotificationPositionPickerView?
-    private var previewTerminationObserver: NSObjectProtocol?
+    private var instanceTerminationObserver: NSObjectProtocol?
+    private var settingsFileWatchTimer: Timer?
+    private var settingsFileLastModifiedAt: Date?
 
-    private var currentPosition: NotificationPosition = {
-        guard let rawValue: String = UserDefaults.standard.string(forKey: "notificationPosition"),
+    private lazy var currentPosition: NotificationPosition = {
+        guard let rawValue: String = settings.string(forKey: .notificationPosition),
               let position = NotificationPosition(rawValue: rawValue)
         else {
             return .topMiddle
         }
         return position
     }()
-    private var currentDisplayTarget: NotificationDisplayTarget = {
-        guard let rawValue = UserDefaults.standard.string(forKey: "notificationDisplayTarget"),
+    private lazy var currentDisplayTarget: NotificationDisplayTarget = {
+        guard let rawValue = settings.string(forKey: .notificationDisplayTarget),
               let target = NotificationDisplayTarget(rawValue: rawValue)
         else {
             return .mainDisplay
@@ -129,11 +136,19 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             debugLog("Debug mode enabled. Writing trace file to: \(debugLogPath)")
         }
         debugLog("Application launched. \(buildIdentitySummary())")
+        switch runtimeConfiguration.settingsSource {
+        case let .suite(name):
+            debugLog("Using settings suite: \(name)")
+        case let .file(url):
+            debugLog("Using settings file: \(url.path)")
+        case .standard:
+            break
+        }
         debugLog(screenTopologySummary())
+        terminatePreviousInstanceIfNeeded()
+        registerInstanceTerminationObserver()
         if launchMode == .menuPreview {
             debugLog("Menu preview mode enabled. Accessibility checks, event listeners, settings writes, and notification moves are disabled.")
-            terminatePreviousPreviewInstanceIfNeeded()
-            registerPreviewTerminationObserver()
         } else {
             checkAccessibilityPermissions()
             eventSource.start()
@@ -141,7 +156,8 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         if launchMode == .menuPreview || !isMenuBarIconHidden {
             setupStatusItem()
         }
-        if launchMode == .full {
+        startSettingsFileWatchIfNeeded()
+        if launchMode != .menuPreview {
             moveAllNotifications(reason: "applicationDidFinishLaunching")
         }
     }
@@ -149,15 +165,18 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     func applicationWillBecomeActive(_: Notification) {
         guard isMenuBarIconHidden else { return }
         isMenuBarIconHidden = false
-        UserDefaults.standard.set(false, forKey: "isMenuBarIconHidden")
+        settings.set(false, forKey: .isMenuBarIconHidden)
+        syncSettingsFileWatchState()
         setupStatusItem()
     }
 
     func applicationWillTerminate(_: Notification) {
-        if let previewTerminationObserver {
-            DistributedNotificationCenter.default().removeObserver(previewTerminationObserver)
-            self.previewTerminationObserver = nil
+        if let instanceTerminationObserver {
+            DistributedNotificationCenter.default().removeObserver(instanceTerminationObserver)
+            self.instanceTerminationObserver = nil
         }
+        settingsFileWatchTimer?.invalidate()
+        settingsFileWatchTimer = nil
     }
 
     private func checkAccessibilityPermissions() {
@@ -189,6 +208,8 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             button.image = menuBarIcon
             if launchMode == .menuPreview {
                 button.toolTip = "PingPlace Preview"
+            } else if launchMode == .smokeTest {
+                button.toolTip = "PingPlace Smoke Test"
             }
         }
         statusItem?.menu = createMenu()
@@ -210,6 +231,14 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             let previewDetailItem = NSMenuItem(title: "Selections stay local to this preview.", action: nil, keyEquivalent: "")
             previewDetailItem.isEnabled = false
             menu.addItem(previewDetailItem)
+            menu.addItem(NSMenuItem.separator())
+        } else if launchMode == .smokeTest {
+            let smokeTestInfoItem = NSMenuItem(title: "Smoke Test", action: nil, keyEquivalent: "")
+            smokeTestInfoItem.isEnabled = false
+            menu.addItem(smokeTestInfoItem)
+            let smokeTestDetailItem = NSMenuItem(title: "Selections stay local to this smoke test.", action: nil, keyEquivalent: "")
+            smokeTestDetailItem.isEnabled = false
+            menu.addItem(smokeTestDetailItem)
             menu.addItem(NSMenuItem.separator())
         }
 
@@ -274,34 +303,55 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
 
         menu.addItem(NSMenuItem(title: "About", action: #selector(showAbout), keyEquivalent: ""))
         menu.addItem(donateMenu)
-        let quitTitle = launchMode == .menuPreview ? "Quit Preview" : "Quit"
+        let quitTitle: String
+        switch launchMode {
+        case .menuPreview:
+            quitTitle = "Quit Preview"
+        case .smokeTest:
+            quitTitle = "Quit Smoke Test"
+        case .full:
+            quitTitle = "Quit"
+        }
         menu.addItem(NSMenuItem(title: quitTitle, action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         return menu
     }
 
-    private func terminatePreviousPreviewInstanceIfNeeded() {
+    private func terminatePreviousInstanceIfNeeded() {
         DistributedNotificationCenter.default().postNotificationName(
-            PingPlaceMenuPreviewIPC.terminatePreviewNotification,
+            PingPlaceInstanceIPC.terminateInstanceNotification,
             object: nil,
-            userInfo: PingPlaceMenuPreviewIPC.terminationUserInfo(senderProcessID: ProcessInfo.processInfo.processIdentifier),
+            userInfo: PingPlaceInstanceIPC.terminationUserInfo(
+                senderProcessID: ProcessInfo.processInfo.processIdentifier,
+                launchMode: launchMode
+            ),
             deliverImmediately: true
         )
     }
 
-    private func registerPreviewTerminationObserver() {
-        previewTerminationObserver = DistributedNotificationCenter.default().addObserver(
-            forName: PingPlaceMenuPreviewIPC.terminatePreviewNotification,
+    private func registerInstanceTerminationObserver() {
+        instanceTerminationObserver = DistributedNotificationCenter.default().addObserver(
+            forName: PingPlaceInstanceIPC.terminateInstanceNotification,
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            guard PingPlaceMenuPreviewIPC.shouldTerminatePreview(
+            guard PingPlaceInstanceIPC.shouldTerminateInstance(
                 currentProcessID: ProcessInfo.processInfo.processIdentifier,
+                currentLaunchMode: self?.launchMode ?? .full,
                 userInfo: notification.userInfo
             ) else {
                 return
             }
-            self?.debugLog("Another preview instance started. Terminating this preview instance.")
+            let modeDescription: String
+            switch self?.launchMode {
+            case .menuPreview:
+                modeDescription = "preview"
+            case .smokeTest:
+                modeDescription = "smoke-test"
+            case .full, .none:
+                modeDescription = "regular"
+            }
+            self?.debugLog("Another \(modeDescription) PingPlace instance started. Terminating this instance.")
             NSApplication.shared.terminate(nil)
         }
     }
@@ -324,7 +374,8 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         isMenuBarIconHidden = true
-        UserDefaults.standard.set(true, forKey: "isMenuBarIconHidden")
+        settings.set(true, forKey: .isMenuBarIconHidden)
+        syncSettingsFileWatchState()
         statusItem = nil
     }
 
@@ -389,7 +440,8 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             return
         }
 
-        UserDefaults.standard.set(position.rawValue, forKey: "notificationPosition")
+        settings.set(position.rawValue, forKey: .notificationPosition)
+        syncSettingsFileWatchState()
         debugLog("Position changed: \(oldPosition.displayName) → \(position.displayName)")
         moveAllNotifications(reason: "changePosition")
     }
@@ -404,8 +456,18 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             return
         }
 
-        UserDefaults.standard.set(target.rawValue, forKey: "notificationDisplayTarget")
-        debugLog("Display target changed: \(oldTarget.displayName) → \(target.displayName)")
+        settings.set(target.rawValue, forKey: .notificationDisplayTarget)
+        syncSettingsFileWatchState()
+        let effectiveTarget = effectiveDisplayTarget()
+        if effectiveTarget == target {
+            debugLog("Display target changed: \(oldTarget.displayName) → \(target.displayName)")
+        } else {
+            debugLog(
+                "Display target changed: \(oldTarget.displayName) → \(target.displayName) " +
+                    "(effective: \(effectiveTarget.displayName))"
+            )
+        }
+        clearCachedNotificationGeometry()
         moveAllNotifications(reason: "changeDisplayTarget")
     }
 
@@ -843,6 +905,49 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         statusItem?.menu = createMenu()
     }
 
+    private func startSettingsFileWatchIfNeeded() {
+        guard let fileURL = settings.fileURL else { return }
+        settingsFileLastModifiedAt = settingsFileModificationDate(fileURL: fileURL)
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.pollSettingsFileChanges()
+        }
+        timer.tolerance = 0.2
+        settingsFileWatchTimer = timer
+    }
+
+    private func pollSettingsFileChanges() {
+        guard let fileURL = settings.fileURL else { return }
+        let currentModifiedAt = settingsFileModificationDate(fileURL: fileURL)
+        guard currentModifiedAt != settingsFileLastModifiedAt else { return }
+        settingsFileLastModifiedAt = currentModifiedAt
+        applyWatchedSettingsFileChanges()
+    }
+
+    private func settingsFileModificationDate(fileURL: URL) -> Date? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path) else {
+            return nil
+        }
+        return attributes[.modificationDate] as? Date
+    }
+
+    private func syncSettingsFileWatchState() {
+        guard let fileURL = settings.fileURL else { return }
+        settingsFileLastModifiedAt = settingsFileModificationDate(fileURL: fileURL)
+    }
+
+    private func applyWatchedSettingsFileChanges() {
+        var shouldMoveNotifications = false
+
+        let loadedPosition = loadedNotificationPosition()
+        if loadedPosition != currentPosition {
+            let oldPosition = currentPosition
+            currentPosition = loadedPosition
+            positionPickerView?.selectedPosition = loadedPosition
+            debugLog("Settings file changed position: \(oldPosition.displayName) → \(loadedPosition.displayName)")
+            shouldMoveNotifications = true
+        }
+
+        let loadedDisplayTarget = loadedNotificationDisplayTarget()
         if loadedDisplayTarget != currentDisplayTarget {
             let oldTarget = currentDisplayTarget
             currentDisplayTarget = loadedDisplayTarget
@@ -875,19 +980,6 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             return .mainDisplay
         }
         return target
-    }
-
-    private func effectiveDisplayTarget() -> NotificationDisplayTarget {
-        NotificationDisplayTargetPolicy.effectiveTarget(
-            requestedTarget: currentDisplayTarget,
-            isPortableMac: isPortableMac,
-            screens: currentScreenDescriptors()
-        )
-    }
-
-    private func refreshMenu() {
-        guard statusItem != nil else { return }
-        statusItem?.menu = createMenu()
     }
 
     private func windowFingerprint(

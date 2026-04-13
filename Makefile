@@ -1,11 +1,11 @@
-.PHONY: all build debug-build generate-build-info run test clean publish save-codesign-identity clear-codesign-identity
+.PHONY: all build debug-build generate-build-info run test smoke-test smoke-test-check clean publish save-codesign-identity clear-codesign-identity
 
 all: build
 
 CODESIGN_IDENTITY_FILE ?= .codesign_identity
 BUILD_INFO_SWIFT ?= .build/BuildInfo.generated.swift
 APP_SWIFT_SOURCES = $(sort $(wildcard src/*.swift)) $(BUILD_INFO_SWIFT)
-TEST_SWIFT_SOURCES = src/MachineModelPolicy.swift src/NotificationDisplayTarget.swift src/PingPlaceLaunchMode.swift src/PingPlaceMenuPreviewIPC.swift src/NotificationPosition.swift src/NotificationPositionGridLayout.swift src/NotificationGeometry.swift src/NotificationPolicyTypes.swift src/NotificationMovePolicy.swift src/NotificationCenterStatePolicy.swift src/ScreenResolutionPolicy.swift src/TreeTraversal.swift src/NotificationController.swift src/NotificationWindowPlacementEngine.swift tests/NotificationBehaviorTests.swift tests/NotificationPositionPickerTests.swift
+TEST_SWIFT_SOURCES = src/MachineModelPolicy.swift src/NotificationDisplayTarget.swift src/NotificationDisplayTargetPolicy.swift src/PingPlaceLaunchMode.swift src/PingPlaceMenuPreviewIPC.swift src/PingPlaceSettings.swift src/NotificationPosition.swift src/NotificationPositionGridLayout.swift src/NotificationGeometry.swift src/NotificationPolicyTypes.swift src/NotificationMovePolicy.swift src/NotificationCenterStatePolicy.swift src/ScreenResolutionPolicy.swift src/TreeTraversal.swift src/NotificationController.swift src/NotificationWindowPlacementEngine.swift tests/NotificationBehaviorTests.swift tests/NotificationPositionPickerTests.swift
 
 ifneq ("$(wildcard $(CODESIGN_IDENTITY_FILE))","")
 CODESIGN_IDENTITY ?= $(shell cat $(CODESIGN_IDENTITY_FILE))
@@ -76,6 +76,12 @@ test:
 	else \
 		echo "No NotificationBehaviorTests on this branch."; \
 	fi
+
+smoke-test:
+	@./scripts/smoke-test-alerter.sh $(SMOKE_TEST_ARGS)
+
+smoke-test-check:
+	@bash -n scripts/smoke-test-alerter.sh
 
 clean:
 	@rm -rf PingPlace.app PingPlace.app.tar.gz .build

@@ -72,6 +72,84 @@ Preview mode:
 - does not persist picker selections
 - replaces any previous preview instance
 
+## Local smoke test
+
+To exercise the live Notification Center path with a real notification, use the local smoke test:
+
+```bash
+make smoke-test
+```
+
+What it does:
+
+- builds a fresh debug app
+- writes smoke-test-only settings into an isolated JSON file
+- asks before stopping any running regular PingPlace instance
+- leaves preview instances alone
+- launches the repo's `PingPlace.app` in `--smoke-test` mode
+- sends a notification with `alerter`
+- exercises the laptop-display target as well when the app reports that the built-in display is available
+- checks the debug log for move activity
+
+Useful options:
+
+```bash
+make smoke-test SMOKE_TEST_ARGS=--yes
+make smoke-test SMOKE_TEST_ARGS=--no-build
+```
+
+Environment variables:
+
+- `PINGPLACE_SMOKE_SETTINGS_FILE`
+- `PINGPLACE_SMOKE_POSITION`
+- `PINGPLACE_SMOKE_DISPLAY_TARGET`
+- `PINGPLACE_SMOKE_TITLE`
+- `PINGPLACE_SMOKE_MESSAGE`
+- `PINGPLACE_SMOKE_SENDER`
+- `PINGPLACE_SMOKE_NOTIFICATION_TIMEOUT`
+
+Notes:
+
+- `alerter` must be installed and allowed to post notifications
+- the smoke test is local-only and not suitable for CI
+- the launched smoke-test instance is closed automatically when the smoke-test run finishes
+- the smoke test stops the regular PingPlace instance before launching so the two instances do not fight over notifications
+- if a regular PingPlace instance was running before the smoke test, that same app bundle is reopened afterward
+- smoke-test preferences are isolated from the regular app by default in `${TMPDIR}/PingPlace.smoke-test.json`
+- when the built-in display is unavailable, the laptop-display scenario is logged as skipped rather than treated as a failure
+
+## Changing settings from the command line
+
+PingPlace currently reads settings at launch from `UserDefaults`.
+
+The regular app uses:
+
+```bash
+defaults write com.grimridge.PingPlace notificationPosition -string deadCenter
+defaults write com.grimridge.PingPlace notificationDisplayTarget -string mainDisplay
+defaults write com.grimridge.PingPlace debugMode -bool true
+```
+
+The smoke-test mode uses a separate JSON file by default:
+
+```bash
+cat > "${TMPDIR}/PingPlace.smoke-test.json" <<'EOF'
+{
+  "debugMode": true,
+  "notificationDisplayTarget": "mainDisplay",
+  "notificationPosition": "deadCenter"
+}
+EOF
+```
+
+You can also launch any instance against an explicit file:
+
+```bash
+open -n PingPlace.app --args --smoke-test --settings-file "${TMPDIR}/PingPlace.smoke-test.json"
+```
+
+The smoke-test mode polls its JSON file and applies `notificationPosition` / `notificationDisplayTarget` changes live. The regular app still reads `UserDefaults` at launch.
+
 ## Build metadata
 
 Builds generate metadata in `.build/BuildInfo.generated.swift` at build time. The startup log includes:

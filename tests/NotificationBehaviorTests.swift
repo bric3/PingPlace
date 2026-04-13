@@ -192,6 +192,90 @@ private func testLaunchModeUsesEnvironmentForPreview() throws {
     )
 }
 
+private func testLaunchModeUsesArgumentForSmokeTest() throws {
+    try assertEqual(
+        PingPlaceLaunchMode.detect(arguments: ["PingPlace", "--smoke-test"], environment: [:]),
+        .smokeTest,
+        "smoke-test argument should enable smoke-test mode"
+    )
+}
+
+private func testSettingsSourceDefaultsToSmokeFileForSmokeTestMode() throws {
+    try assertEqual(
+        PingPlaceSettingsSource.detect(
+            arguments: ["PingPlace", "--smoke-test"],
+            environment: [:],
+            launchMode: .smokeTest
+        ),
+        .file(PingPlaceSettingsSource.defaultSmokeTestFile),
+        "smoke-test mode should default to the isolated smoke-test settings file"
+    )
+}
+
+private func testSettingsSourceUsesExplicitFileWhenProvided() throws {
+    try assertEqual(
+        PingPlaceSettingsSource.detect(
+            arguments: ["PingPlace", "--smoke-test", "--settings-file", "/tmp/pingplace-test.json"],
+            environment: [:],
+            launchMode: .smokeTest
+        ),
+        .file(URL(fileURLWithPath: "/tmp/pingplace-test.json")),
+        "explicit settings file arguments should override the smoke-test default"
+    )
+}
+
+private func testSettingsSourceUsesExplicitSuiteWhenProvided() throws {
+    try assertEqual(
+        PingPlaceSettingsSource.detect(
+            arguments: ["PingPlace", "--settings-suite", "com.example.custom"],
+            environment: [:],
+            launchMode: .full
+        ),
+        .suite("com.example.custom"),
+        "explicit settings suite arguments should override the standard settings domain"
+    )
+}
+
+private func testSettingsSourceUsesEnvironmentFileWhenProvided() throws {
+    try assertEqual(
+        PingPlaceSettingsSource.detect(
+            arguments: ["PingPlace"],
+            environment: ["PINGPLACE_SETTINGS_FILE": "/tmp/pingplace-environment.json"],
+            launchMode: .full
+        ),
+        .file(URL(fileURLWithPath: "/tmp/pingplace-environment.json")),
+        "settings file environment variables should override the standard settings source"
+    )
+}
+
+private func testFileBackedSettingsPersistValues() throws {
+    let settingsFile = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent(UUID().uuidString)
+        .appendingPathExtension("json")
+    defer { try? FileManager.default.removeItem(at: settingsFile) }
+
+    let settings = PingPlaceSettings(source: .file(settingsFile))
+    settings.set("deadCenter", forKey: .notificationPosition)
+    settings.set("builtInDisplay", forKey: .notificationDisplayTarget)
+    settings.set(true, forKey: .debugMode)
+
+    try assertEqual(
+        settings.string(forKey: .notificationPosition),
+        "deadCenter",
+        "file-backed settings should persist notification position"
+    )
+    try assertEqual(
+        settings.string(forKey: .notificationDisplayTarget),
+        "builtInDisplay",
+        "file-backed settings should persist display target"
+    )
+    try assertEqual(
+        settings.object(forKey: .debugMode) as? Bool,
+        true,
+        "file-backed settings should persist debug mode"
+    )
+}
+
 private func testPortableMacDetectionMatchesMacBookModels() throws {
     try assertEqual(
         MachineModelPolicy.isPortableMac(modelIdentifier: "MacBookPro18,3"),
@@ -291,21 +375,67 @@ private func testDisplayTargetPolicyUsesGenericSectionTitleWhenSelectorIsVisible
     )
 }
 
-private func testMenuPreviewIPCDoesNotTerminateSameProcess() throws {
-    let userInfo = PingPlaceMenuPreviewIPC.terminationUserInfo(senderProcessID: 4242)
+private func testInstanceIPCDoesNotTerminateSameProcess() throws {
+    let userInfo = PingPlaceInstanceIPC.terminationUserInfo(senderProcessID: 4242, launchMode: .menuPreview)
     try assertEqual(
-        PingPlaceMenuPreviewIPC.shouldTerminatePreview(currentProcessID: 4242, userInfo: userInfo),
+        PingPlaceInstanceIPC.shouldTerminateInstance(
+            currentProcessID: 4242,
+            currentLaunchMode: .menuPreview,
+            userInfo: userInfo
+        ),
         false,
-        "preview IPC should ignore termination requests sent by the same process"
+        "instance IPC should ignore termination requests sent by the same process"
     )
 }
 
-private func testMenuPreviewIPCTerminatesDifferentProcess() throws {
-    let userInfo = PingPlaceMenuPreviewIPC.terminationUserInfo(senderProcessID: 4242)
+private func testInstanceIPCTerminatesDifferentProcessInSameMode() throws {
+    let userInfo = PingPlaceInstanceIPC.terminationUserInfo(senderProcessID: 4242, launchMode: .menuPreview)
     try assertEqual(
-        PingPlaceMenuPreviewIPC.shouldTerminatePreview(currentProcessID: 9898, userInfo: userInfo),
+        PingPlaceInstanceIPC.shouldTerminateInstance(
+            currentProcessID: 9898,
+            currentLaunchMode: .menuPreview,
+            userInfo: userInfo
+        ),
         true,
-        "preview IPC should terminate older preview instances"
+        "instance IPC should terminate older instances in the same mode"
+    )
+}
+
+private func testInstanceIPCDoesNotTerminateDifferentProcessInDifferentMode() throws {
+    let userInfo = PingPlaceInstanceIPC.terminationUserInfo(senderProcessID: 4242, launchMode: .menuPreview)
+    try assertEqual(
+        PingPlaceInstanceIPC.shouldTerminateInstance(
+            currentProcessID: 9898,
+            currentLaunchMode: .full,
+            userInfo: userInfo
+        ),
+        false,
+        "regular PingPlace should ignore preview termination requests"
+    )
+}
+
+private func testInstanceIPCDoesNotTerminateSmokeTestFromRegularInstance() throws {
+    let userInfo = PingPlaceInstanceIPC.terminationUserInfo(senderProcessID: 4242, launchMode: .smokeTest)
+    try assertEqual(
+        PingPlaceInstanceIPC.shouldTerminateInstance(
+            currentProcessID: 9898,
+            currentLaunchMode: .full,
+            userInfo: userInfo
+        ),
+        false,
+        "regular PingPlace should ignore smoke-test termination requests"
+    )
+}
+
+private func testInstanceIPCDoesNotTerminateWhenUserInfoIsMalformed() throws {
+    try assertEqual(
+        PingPlaceInstanceIPC.shouldTerminateInstance(
+            currentProcessID: 9898,
+            currentLaunchMode: .full,
+            userInfo: [:]
+        ),
+        false,
+        "instance IPC should ignore malformed termination requests"
     )
 }
 
@@ -743,6 +873,68 @@ private func testControllerWidgetCloseDoesNotTriggerMoveWhenTopRight() throws {
     try assertEqual(delegate.moveReasons, [], "panel close should not trigger move when position is top-right")
 }
 
+private func testControllerNotificationWindowCreatedSchedulesSettleFollowUps() throws {
+    let delegate = TestControllerDelegate()
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 10,
+        notificationSettleIntervals: [0.2, 0.6]
+    )
+
+    controller.handleNotificationWindowCreated(needsSettleFollowUp: true)
+
+    try assertEqual(scheduler.scheduledActions.count, 1, "window creation should schedule the first settle follow-up")
+    scheduler.runNext()
+    try assertEqual(delegate.moveReasons, ["notificationWindowCreated-settle1"], "first settle follow-up should trigger a move pass")
+    try assertEqual(scheduler.scheduledActions.count, 1, "first settle follow-up should schedule the second settle follow-up")
+
+    scheduler.runNext()
+    try assertEqual(
+        delegate.moveReasons,
+        ["notificationWindowCreated-settle1", "notificationWindowCreated-settle2"],
+        "second settle follow-up should also trigger a move pass"
+    )
+    try assertEqual(scheduler.scheduledActions.count, 0, "settle follow-up sequence should end after the last configured step")
+}
+
+private func testControllerNotificationWindowCreatedCancelsPreviousSettleFollowUp() throws {
+    let delegate = TestControllerDelegate()
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 10,
+        notificationSettleIntervals: [0.2, 0.6]
+    )
+
+    controller.handleNotificationWindowCreated(needsSettleFollowUp: true)
+    let firstAction = scheduler.firstScheduledAction()
+    controller.handleNotificationWindowCreated(needsSettleFollowUp: true)
+
+    try assertEqual(firstAction?.isCancelled, true, "a new notification should cancel the previous settle follow-up sequence")
+    try assertEqual(scheduler.scheduledActions.count, 2, "scheduler should keep the cancelled action and queue the replacement")
+}
+
+private func testControllerNotificationWindowCreatedSkipsSettleFollowUpsWhenNotNeeded() throws {
+    let delegate = TestControllerDelegate()
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 10,
+        notificationSettleIntervals: [0.2, 0.6]
+    )
+
+    controller.handleNotificationWindowCreated(needsSettleFollowUp: false)
+
+    try assertEqual(scheduler.scheduledActions.count, 0, "notification settle follow-ups should not run when the initial move already landed correctly")
+}
+
 private func testControllerWidgetCloseTriggersMoveWhenTopRightTargetsBuiltInDisplay() throws {
     let delegate = TestControllerDelegate()
     delegate.currentPosition = .topRight
@@ -1028,8 +1220,46 @@ private func testPlacementEngineUsesBuiltInDisplayAsReferenceWhenRequested() thr
     }
 
     try assertEqual(plan.referenceScreen?.frame, laptopSecondaryScreen.frame, "reference screen should switch to built-in display")
-    try assertEqual(plan.targetPosition.x, -2272, "built-in target x")
-    try assertEqual(plan.targetPosition.y, 508, "built-in target y")
+    try assertEqual(plan.targetPosition.x, -1450, "built-in target x should land on the laptop display")
+    try assertEqual(plan.targetPosition.y, 2398, "built-in target y should include the laptop display origin")
+    try assertEqual(plan.targetBannerPosition.x, 1550, "built-in banner x should be horizontally centered on the laptop display")
+    try assertEqual(plan.targetBannerPosition.y, 2444, "built-in banner y should remain aligned with the root-local offset")
+}
+
+private func testPlacementEngineResetsCachedGeometryWhenDisplayTargetChanges() throws {
+    let engine = NotificationWindowPlacementEngine(paddingAboveDock: 30)
+    let snapshot = NotificationWindowSnapshot(
+        identifier: "banner-1",
+        focused: false,
+        isNotificationCenterPanelOpen: false,
+        notificationSubrole: "AXNotificationCenterBanner",
+        windowSize: CGSize(width: 3360, height: 1890),
+        notificationSize: CGSize(width: 344, height: 57),
+        notificationPosition: CGPoint(x: 3376, y: 46)
+    )
+
+    _ = engine.evaluateMove(
+        snapshot: snapshot,
+        currentPosition: .deadCenter,
+        displayTarget: .mainDisplay,
+        screens: dualScreenLayout
+    )
+
+    let evaluation = engine.evaluateMove(
+        snapshot: snapshot,
+        currentPosition: .deadCenter,
+        displayTarget: .builtInDisplay,
+        screens: dualScreenLayout
+    )
+
+    guard case let .move(plan) = evaluation else {
+        throw TestFailure.assertionFailed("placement engine should still produce a move plan after switching display target")
+    }
+
+    try assertTrue(plan.cacheInitialized, "placement engine should reinitialize cache when the reference screen changes")
+    try assertEqual(plan.referenceScreen?.frame, laptopSecondaryScreen.frame, "reference screen should switch to built-in display after target change")
+    try assertEqual(plan.targetPosition.x, -1450, "display target change should produce a visible laptop-display x coordinate")
+    try assertEqual(plan.targetPosition.y, 2406, "display target change should produce a visible laptop-display y coordinate")
 }
 
 private func testPlacementEngineResetsCacheWhenIdentifierChanges() throws {
@@ -1104,7 +1334,37 @@ private func testPlacementEngineRequestsResetToCachedPosition() throws {
         throw TestFailure.assertionFailed("placement engine should produce a move plan for repeated banner")
     }
 
-    try assertEqual(plan.resetPosition, CGPoint(x: 3000, y: 46), "placement engine reset position")
+    try assertEqual(plan.targetPosition.x, -1492, "repeated banner target x")
+    try assertEqual(plan.targetPosition.y, 877.5, "repeated banner target y")
+}
+
+private func testPlacementEngineRebasesRootWindowWhenSwitchingFromMainToBuiltInDisplay() throws {
+    let engine = NotificationWindowPlacementEngine(paddingAboveDock: 30)
+    let evaluation = engine.evaluateMove(
+        snapshot: NotificationWindowSnapshot(
+            identifier: "banner-1",
+            focused: false,
+            isNotificationCenterPanelOpen: false,
+            notificationSubrole: "AXNotificationCenterAlert",
+            rootWindowPosition: CGPoint(x: -1492, y: 886),
+            windowSize: CGSize(width: 3360, height: 1890),
+            notificationSize: CGSize(width: 344, height: 57),
+            notificationPosition: CGPoint(x: 1508, y: 932)
+        ),
+        currentPosition: .deadCenter,
+        displayTarget: .builtInDisplay,
+        screens: dualScreenLayout
+    )
+
+    guard case let .move(plan) = evaluation else {
+        throw TestFailure.assertionFailed("placement engine should produce a move plan when switching from main to built-in display")
+    }
+
+    try assertTrue(plan.cacheInitialized, "switching displays should initialize cache for the new reference screen")
+    try assertEqual(plan.targetPosition.x, -1450, "display switching target x should place the notification on the laptop display")
+    try assertEqual(plan.targetPosition.y, 2406, "display switching target y should place the notification on the laptop display")
+    try assertEqual(plan.targetBannerPosition.x, 1550, "display switching banner x should place the notification on the laptop display")
+    try assertEqual(plan.targetBannerPosition.y, 2452, "display switching banner y should place the notification on the laptop display")
 }
 
 private func testPlacementEngineSkipsFocusedWindow() throws {
@@ -1368,6 +1628,12 @@ struct NotificationBehaviorTestRunner {
             ("launch mode defaults to full", testLaunchModeDefaultsToFull),
             ("launch mode uses argument for preview", testLaunchModeUsesArgumentForPreview),
             ("launch mode uses environment for preview", testLaunchModeUsesEnvironmentForPreview),
+            ("launch mode uses argument for smoke test", testLaunchModeUsesArgumentForSmokeTest),
+            ("settings source defaults to smoke file for smoke test mode", testSettingsSourceDefaultsToSmokeFileForSmokeTestMode),
+            ("settings source uses explicit file when provided", testSettingsSourceUsesExplicitFileWhenProvided),
+            ("settings source uses explicit suite when provided", testSettingsSourceUsesExplicitSuiteWhenProvided),
+            ("settings source uses environment file when provided", testSettingsSourceUsesEnvironmentFileWhenProvided),
+            ("file-backed settings persist values", testFileBackedSettingsPersistValues),
             ("portable mac detection matches MacBook models", testPortableMacDetectionMatchesMacBookModels),
             ("portable mac detection rejects desktop models", testPortableMacDetectionRejectsDesktopModels),
             ("display target policy shows selector only when laptop display is available", testDisplayTargetPolicyShowsSelectorOnlyWhenLaptopDisplayIsAvailable),
@@ -1375,6 +1641,11 @@ struct NotificationBehaviorTestRunner {
             ("display target policy restores laptop display when it becomes available", testDisplayTargetPolicyRestoresLaptopDisplayWhenItBecomesAvailable),
             ("display target policy uses main-display section title when selector is hidden", testDisplayTargetPolicyUsesMainDisplaySectionTitleWhenSelectorIsHidden),
             ("display target policy uses generic section title when selector is visible", testDisplayTargetPolicyUsesGenericSectionTitleWhenSelectorIsVisible),
+            ("instance IPC ignores same-process termination", testInstanceIPCDoesNotTerminateSameProcess),
+            ("instance IPC terminates different process in same mode", testInstanceIPCTerminatesDifferentProcessInSameMode),
+            ("instance IPC ignores different process in different mode", testInstanceIPCDoesNotTerminateDifferentProcessInDifferentMode),
+            ("instance IPC ignores smoke-test termination requests for regular mode", testInstanceIPCDoesNotTerminateSmokeTestFromRegularInstance),
+            ("instance IPC ignores malformed termination requests", testInstanceIPCDoesNotTerminateWhenUserInfoIsMalformed),
             ("dead-center placement", testDeadCenterPlacement),
             ("placement for all notification positions", testPlacementForAllNotificationPositions),
             ("grid layout returns top-left cell", testGridLayoutReturnsExpectedPositionForTopLeftCell),
