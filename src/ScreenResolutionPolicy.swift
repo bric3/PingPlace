@@ -1,6 +1,13 @@
 import CoreGraphics
 
 enum ScreenResolutionPolicy {
+    static func isMainDisplay(
+        screenDisplayID: CGDirectDisplayID?,
+        mainDisplayID: CGDirectDisplayID
+    ) -> Bool {
+        screenDisplayID == mainDisplayID
+    }
+
     static func accessibilityRect(
         from cocoaRect: CGRect,
         globalTopEdge: CGFloat

@@ -807,9 +807,12 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     private func currentScreenDescriptors() -> [ScreenDescriptor] {
         let screens = NSScreen.screens
         let globalTopEdge = screens.map(\.frame.maxY).max() ?? 0
+        let mainDisplayID = CGMainDisplayID()
 
         return screens.map { screen in
-            ScreenDescriptor(
+            let screenDisplayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
+                .map { CGDirectDisplayID(truncating: $0) }
+            return ScreenDescriptor(
                 frame: ScreenResolutionPolicy.accessibilityRect(
                     from: screen.frame,
                     globalTopEdge: globalTopEdge
@@ -818,7 +821,10 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
                     from: screen.visibleFrame,
                     globalTopEdge: globalTopEdge
                 ),
-                isMain: screen == NSScreen.main,
+                isMain: ScreenResolutionPolicy.isMainDisplay(
+                    screenDisplayID: screenDisplayID,
+                    mainDisplayID: mainDisplayID
+                ),
                 isBuiltIn: isBuiltInScreen(screen)
             )
         }

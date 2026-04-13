@@ -1282,6 +1282,24 @@ private func testAccessibilityRectConvertsLowerScreenIntoAXCoordinateSpace() thr
     )
 }
 
+private func testIsMainDisplayUsesCoreGraphicsDisplayIdentifier() throws {
+    try assertEqual(
+        ScreenResolutionPolicy.isMainDisplay(screenDisplayID: 111, mainDisplayID: 111),
+        true,
+        "matching CoreGraphics display identifiers should mark the screen as main"
+    )
+    try assertEqual(
+        ScreenResolutionPolicy.isMainDisplay(screenDisplayID: 222, mainDisplayID: 111),
+        false,
+        "non-matching CoreGraphics display identifiers should not mark the screen as main"
+    )
+    try assertEqual(
+        ScreenResolutionPolicy.isMainDisplay(screenDisplayID: nil, mainDisplayID: 111),
+        false,
+        "missing screen identifiers should not be treated as the main display"
+    )
+}
+
 private func testResolveScreenPrefersPositionMatch() throws {
     let resolved = ScreenResolutionPolicy.resolveScreen(
         position: pointInsideLaptopScreen,
@@ -1424,6 +1442,7 @@ struct NotificationBehaviorTestRunner {
             ("preferred screen returns built-in display when requested", testPreferredScreenReturnsBuiltInDisplayWhenRequested),
             ("preferred screen falls back to main display when built-in display is unavailable", testPreferredScreenFallsBackToMainDisplayWhenBuiltInDisplayIsUnavailable),
             ("accessibility rect converts lower screen into AX coordinate space", testAccessibilityRectConvertsLowerScreenIntoAXCoordinateSpace),
+            ("is main display uses CoreGraphics display identifier", testIsMainDisplayUsesCoreGraphicsDisplayIdentifier),
             ("dock size uses visible frame difference", testDockSizeUsesVisibleFrameDifference),
         ]
 
