@@ -15,14 +15,13 @@ As seen in [Lifehacker](https://lifehacker.com/tech/change-where-macos-notificat
 - Notification Center handling when swiping right to left or toggling it
 - Recovery mechanisms for delayed notification availability
 - New menu with a visual position picker
+- On laptops, an option to target either the Main Display or the Laptop Display
 - Split code into smaller components and added tests
 
 ## Installation
 
-```bash
-brew tap notwadegrimridge/brew
-brew install pingplace --no-quarantine
-```
+Local build only.
+Clone, then build.
 
 ## Usage
 

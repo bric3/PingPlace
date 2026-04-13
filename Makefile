@@ -1,9 +1,11 @@
-.PHONY: all build debug-build generate-build-info run test smoke-test smoke-test-check clean publish save-codesign-identity clear-codesign-identity
+.PHONY: all build debug-build generate-build-info run test smoke-test smoke-test-check check-build-deps check-smoke-test-deps clean publish save-codesign-identity clear-codesign-identity
 
 all: build
 
 CODESIGN_IDENTITY_FILE ?= .codesign_identity
 BUILD_INFO_SWIFT ?= .build/BuildInfo.generated.swift
+BUILD_DEPENDENCIES = bash swiftc lipo codesign git shasum awk find date
+SMOKE_TEST_DEPENDENCIES = bash open alerter grep awk ps kill tail wc head make
 APP_SWIFT_SOURCES = $(sort $(wildcard src/*.swift)) $(BUILD_INFO_SWIFT)
 TEST_SWIFT_SOURCES = src/MachineModelPolicy.swift src/NotificationDisplayTarget.swift src/NotificationDisplayTargetPolicy.swift src/PingPlaceLaunchMode.swift src/PingPlaceMenuPreviewIPC.swift src/PingPlaceSettings.swift src/NotificationPosition.swift src/NotificationPositionGridLayout.swift src/NotificationGeometry.swift src/NotificationPolicyTypes.swift src/NotificationMovePolicy.swift src/NotificationCenterStatePolicy.swift src/ScreenResolutionPolicy.swift src/TreeTraversal.swift src/NotificationController.swift src/NotificationWindowPlacementEngine.swift tests/NotificationBehaviorTests.swift tests/NotificationPositionPickerTests.swift
 
@@ -21,7 +23,36 @@ define warn_adhoc_signing
 	fi
 endef
 
-build:
+check-build-deps:
+	@missing=0; \
+	for command in $(BUILD_DEPENDENCIES); do \
+		if ! command -v "$$command" >/dev/null 2>&1; then \
+			echo "error: missing required build dependency '$$command'"; \
+			missing=1; \
+		fi; \
+	done; \
+	if [ "$$missing" -ne 0 ]; then \
+		echo "hint: install Xcode Command Line Tools with 'xcode-select --install'."; \
+		exit 1; \
+	fi
+
+check-smoke-test-deps: check-build-deps
+	@missing=0; \
+	for command in $(SMOKE_TEST_DEPENDENCIES); do \
+		if ! command -v "$$command" >/dev/null 2>&1; then \
+			echo "error: missing required smoke-test dependency '$$command'"; \
+			if [ "$$command" = "alerter" ]; then \
+				echo "hint: install it with 'brew install vjeantet/alerter/alerter'"; \
+			fi; \
+			missing=1; \
+		fi; \
+	done; \
+	if [ "$$missing" -ne 0 ]; then \
+		echo "hint: make sure macOS allows the chosen notification sender to post notifications."; \
+		exit 1; \
+	fi
+
+build: check-build-deps
 	@mkdir -p .build
 	@$(MAKE) generate-build-info
 	@mkdir -p PingPlace.app/Contents/MacOS
@@ -36,7 +67,7 @@ build:
 	$(warn_adhoc_signing)
 	codesign --entitlements src/PingPlace.entitlements -fvs "$(CODESIGN_IDENTITY)" PingPlace.app
 
-debug-build:
+debug-build: check-build-deps
 	@mkdir -p .build
 	@$(MAKE) generate-build-info
 	@mkdir -p PingPlace.app/Contents/MacOS
@@ -68,7 +99,7 @@ generate-build-info:
 run:
 	@open PingPlace.app
 
-test:
+test: check-build-deps
 	@mkdir -p .build
 	@if [ -f tests/NotificationBehaviorTests.swift ]; then \
 		swiftc $(TEST_SWIFT_SOURCES) -o .build/NotificationBehaviorTests; \
@@ -77,7 +108,7 @@ test:
 		echo "No NotificationBehaviorTests on this branch."; \
 	fi
 
-smoke-test:
+smoke-test: check-smoke-test-deps
 	@./scripts/smoke-test-alerter.sh $(SMOKE_TEST_ARGS)
 
 smoke-test-check:
