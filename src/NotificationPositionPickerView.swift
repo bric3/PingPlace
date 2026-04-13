@@ -2,8 +2,7 @@ import Cocoa
 
 final class NotificationPositionPickerView: NSView {
     private enum Metrics {
-        static let contentInsets = NSEdgeInsets(top: 14, left: 22, bottom: 16, right: 0)
-        static let titleHeight: CGFloat = 18
+        static let contentInsets = NSEdgeInsets(top: 4, left: 22, bottom: 16, right: 22)
         static let statusHeight: CGFloat = 16
         static let verticalSpacing: CGFloat = 8
         static let gridHeight: CGFloat = 144
@@ -11,12 +10,16 @@ final class NotificationPositionPickerView: NSView {
         static let cellSpacing: CGFloat = 6
         static let preferredSize = CGSize(
             width: contentInsets.left + gridSize.width + 12,
-            height: 230
+            height: 202
         )
         static let screenCornerRadius: CGFloat = 8
         static let zoneCornerRadius: CGFloat = screenCornerRadius
         static let indicatorSize = CGSize(width: 28, height: 13)
         static let indicatorInset: CGFloat = 8
+    }
+
+    static var preferredMenuWidth: CGFloat {
+        Metrics.preferredSize.width
     }
 
     private let onSelect: (NotificationPosition) -> Void
@@ -114,32 +117,15 @@ final class NotificationPositionPickerView: NSView {
         NSColor.clear.setFill()
         dirtyRect.fill()
 
-        drawTitle()
         drawStatusText()
         drawGrid()
     }
 
-    private func drawTitle() {
-        let titleRect = CGRect(
-            x: Metrics.contentInsets.left,
-            y: bounds.height - Metrics.contentInsets.top - Metrics.titleHeight,
-            width: bounds.width - Metrics.contentInsets.left - Metrics.contentInsets.right,
-            height: Metrics.titleHeight
-        )
-
-        let titleAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
-            .foregroundColor: NSColor.secondaryLabelColor,
-        ]
-        let title = NSString(string: "Position on the Main Display")
-        title.draw(in: titleRect, withAttributes: titleAttributes)
-    }
-
     private func drawStatusText() {
         let statusRect = CGRect(
-            x: Metrics.contentInsets.left,
+            x: 0,
             y: Metrics.contentInsets.bottom,
-            width: bounds.width - Metrics.contentInsets.left - Metrics.contentInsets.right,
+            width: bounds.width,
             height: Metrics.statusHeight
         )
 
@@ -149,9 +135,12 @@ final class NotificationPositionPickerView: NSView {
         } else {
             label = "Current: \(selectedPosition.displayName)"
         }
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .center
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 11, weight: .regular),
             .foregroundColor: hoveredPosition == nil ? NSColor.secondaryLabelColor : NSColor.labelColor,
+            .paragraphStyle: paragraphStyle,
         ]
         NSString(string: label).draw(in: statusRect, withAttributes: attributes)
     }
@@ -227,7 +216,7 @@ final class NotificationPositionPickerView: NSView {
 
     private var gridFrame: CGRect {
         CGRect(
-            x: Metrics.contentInsets.left,
+            x: (bounds.width - Metrics.gridSize.width) / 2,
             y: Metrics.contentInsets.bottom + Metrics.statusHeight + Metrics.verticalSpacing,
             width: Metrics.gridSize.width,
             height: Metrics.gridSize.height

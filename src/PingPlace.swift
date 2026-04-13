@@ -72,6 +72,8 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     }()
     private lazy var fileDebugLogger: FileDebugLogger? = debugMode ? FileDebugLogger() : nil
     private let launchAgentPlistPath: String = NSHomeDirectory() + "/Library/LaunchAgents/com.grimridge.PingPlace.plist"
+    private let isPortableMac = MachineModelPolicy.currentModelIdentifier().map { MachineModelPolicy.isPortableMac(modelIdentifier: $0) } ?? false
+    private weak var displayTargetPickerView: NotificationDisplayTargetPickerView?
     private weak var positionPickerView: NotificationPositionPickerView?
     private var previewTerminationObserver: NSObjectProtocol?
 
@@ -82,6 +84,14 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             return .topMiddle
         }
         return position
+    }()
+    private var currentDisplayTarget: NotificationDisplayTarget = {
+        guard let rawValue = UserDefaults.standard.string(forKey: "notificationDisplayTarget"),
+              let target = NotificationDisplayTarget(rawValue: rawValue)
+        else {
+            return .mainDisplay
+        }
+        return target
     }()
 
     private lazy var controller = NotificationController(
@@ -108,6 +118,10 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
 
     func notificationPosition() -> NotificationPosition {
         currentPosition
+    }
+
+    func notificationDisplayTarget() -> NotificationDisplayTarget {
+        currentDisplayTarget
     }
 
     func applicationDidFinishLaunching(_: Notification) {
@@ -192,6 +206,21 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             previewDetailItem.isEnabled = false
             menu.addItem(previewDetailItem)
             menu.addItem(NSMenuItem.separator())
+        }
+
+        let positionSectionTitleItem = NSMenuItem(title: "Notification Position", action: nil, keyEquivalent: "")
+        positionSectionTitleItem.isEnabled = false
+        menu.addItem(positionSectionTitleItem)
+
+        if isPortableMac {
+            let displayTargetPickerItem = NSMenuItem()
+            let pickerView = NotificationDisplayTargetPickerView(selectedTarget: currentDisplayTarget) { [weak self] target in
+                self?.setDisplayTarget(target)
+            }
+            displayTargetPickerItem.view = pickerView
+            displayTargetPickerItem.isEnabled = true
+            displayTargetPickerView = pickerView
+            menu.addItem(displayTargetPickerItem)
         }
 
         let positionPickerItem = NSMenuItem()
@@ -353,6 +382,21 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         moveAllNotifications(reason: "changePosition")
     }
 
+    private func setDisplayTarget(_ target: NotificationDisplayTarget) {
+        let oldTarget = currentDisplayTarget
+        currentDisplayTarget = target
+        displayTargetPickerView?.selectedTarget = target
+
+        if launchMode == .menuPreview {
+            debugLog("Preview display target changed: \(oldTarget.displayName) → \(target.displayName)")
+            return
+        }
+
+        UserDefaults.standard.set(target.rawValue, forKey: "notificationDisplayTarget")
+        debugLog("Display target changed: \(oldTarget.displayName) → \(target.displayName)")
+        moveAllNotifications(reason: "changeDisplayTarget")
+    }
+
     private enum WindowMoveResult {
         case moved
         case noBannerContainer
@@ -364,7 +408,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     }
 
     private func moveNotificationResult(_ window: AXUIElement) -> WindowMoveResult {
-        guard currentPosition != .topRight else { return .nonMovableCandidate }
+        guard currentPosition != .topRight || currentDisplayTarget != .mainDisplay else { return .nonMovableCandidate }
 
         let windowIdentifier = axClient.windowIdentifier(window)
         let focusedWindow = axClient.isFocused(window)
@@ -411,6 +455,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             focused: focusedWindow,
             isNotificationCenterPanelOpen: hasNotificationCenterUI(),
             notificationSubrole: bannerSubrole,
+            rootWindowPosition: windowPosition ?? .zero,
             windowSize: resolvedWindowSize,
             notificationSize: resolvedNotifSize,
             notificationPosition: resolvedPosition
@@ -418,6 +463,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         let evaluation = placementEngine.evaluateMove(
             snapshot: snapshot,
             currentPosition: currentPosition,
+            displayTarget: currentDisplayTarget,
             screens: currentScreenDescriptors()
         )
 
@@ -465,7 +511,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             let cache = placementEngine.cache!
             let dockSize = plan.referenceScreen.map(ScreenResolutionPolicy.dockSize(for:)) ?? 0
             let newPosition = calculateNewPosition(
-                windowSize: cache.initialWindowSize,
+                windowSize: plan.referenceScreen?.frame.size ?? cache.initialWindowSize,
                 notifSize: cache.initialNotificationSize,
                 position: cache.initialPosition,
                 padding: cache.initialPadding,
@@ -675,7 +721,8 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             ScreenDescriptor(
                 frame: screen.frame,
                 visibleFrame: screen.visibleFrame,
-                isMain: screen == NSScreen.main
+                isMain: screen == NSScreen.main,
+                isBuiltIn: isBuiltInScreen(screen)
             )
         }
     }
@@ -770,7 +817,8 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         let frame = rectSummary(screen.frame)
         let visible = rectSummary(screen.visibleFrame)
         let isMain = screen == NSScreen.main
-        return "{id=\(id),main=\(isMain),frame=\(frame),visible=\(visible)}"
+        let isBuiltIn = isBuiltInScreen(screen)
+        return "{id=\(id),main=\(isMain),builtIn=\(isBuiltIn),frame=\(frame),visible=\(visible)}"
     }
 
     private func sizeSummary(_ size: CGSize) -> String {
@@ -787,7 +835,8 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             let frame = rectSummary(screen.frame)
             let visibleFrame = rectSummary(screen.visibleFrame)
             let isMain = screen == NSScreen.main
-            return "#\(index){id=\(id),main=\(isMain),frame=\(frame),visible=\(visibleFrame)}"
+            let isBuiltIn = isBuiltInScreen(screen)
+            return "#\(index){id=\(id),main=\(isMain),builtIn=\(isBuiltIn),frame=\(frame),visible=\(visibleFrame)}"
         }.joined(separator: " ")
         return "screens=[\(screensSummary)]"
     }
@@ -797,6 +846,13 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             return nil
         }
         return String(screenNumber.uint32Value)
+    }
+
+    private func isBuiltInScreen(_ screen: NSScreen) -> Bool {
+        guard let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return false
+        }
+        return CGDisplayIsBuiltin(CGDirectDisplayID(screenNumber.uint32Value)) != 0
     }
 
     private func rectSummary(_ rect: CGRect) -> String {

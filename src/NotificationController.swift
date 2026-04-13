@@ -3,6 +3,7 @@ import Foundation
 protocol NotificationControllerDelegate: AnyObject {
     func debugLog(_ message: String)
     func notificationPosition() -> NotificationPosition
+    func notificationDisplayTarget() -> NotificationDisplayTarget
     func screenTopologySummary() -> String
     func clearCachedNotificationGeometry()
     @discardableResult
@@ -104,12 +105,16 @@ final class NotificationController {
             if pollingEndTime == nil || Date() >= pollingEndTime! {
                 pollingEndTime = Date().addingTimeInterval(6.5)
             }
-            if delegate.notificationPosition() != .topRight {
+            if shouldMoveForCurrentDisplayTarget(delegate) {
                 triggerRecoveryReposition(reason: "notificationCenterClosed")
             }
         }
 
         lastWidgetWindowCount = currentNCState
+    }
+
+    private func shouldMoveForCurrentDisplayTarget(_ delegate: NotificationControllerDelegate) -> Bool {
+        !(delegate.notificationPosition() == .topRight && delegate.notificationDisplayTarget() == .mainDisplay)
     }
 
     func invalidate() {

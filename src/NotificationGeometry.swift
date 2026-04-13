@@ -39,7 +39,7 @@ enum NotificationGeometry {
         case .topMiddle, .bottomMiddle, .deadCenter:
             newX = (windowSize.width - notifSize.width) / 2 - position.x
         case .topRight, .middleRight, .bottomRight:
-            newX = 0
+            newX = windowSize.width - notifSize.width - padding - position.x
         }
 
         switch currentPosition {

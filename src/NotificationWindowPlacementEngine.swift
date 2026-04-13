@@ -5,9 +5,30 @@ struct NotificationWindowSnapshot {
     let focused: Bool
     let isNotificationCenterPanelOpen: Bool
     let notificationSubrole: String?
+    let rootWindowPosition: CGPoint
     let windowSize: CGSize
     let notificationSize: CGSize
     let notificationPosition: CGPoint
+
+    init(
+        identifier: String?,
+        focused: Bool,
+        isNotificationCenterPanelOpen: Bool,
+        notificationSubrole: String?,
+        rootWindowPosition: CGPoint = .zero,
+        windowSize: CGSize,
+        notificationSize: CGSize,
+        notificationPosition: CGPoint
+    ) {
+        self.identifier = identifier
+        self.focused = focused
+        self.isNotificationCenterPanelOpen = isNotificationCenterPanelOpen
+        self.notificationSubrole = notificationSubrole
+        self.rootWindowPosition = rootWindowPosition
+        self.windowSize = windowSize
+        self.notificationSize = notificationSize
+        self.notificationPosition = notificationPosition
+    }
 }
 
 struct NotificationWindowCache: Equatable {
@@ -48,6 +69,7 @@ final class NotificationWindowPlacementEngine {
     func evaluateMove(
         snapshot: NotificationWindowSnapshot,
         currentPosition: NotificationPosition,
+        displayTarget: NotificationDisplayTarget = .mainDisplay,
         screens: [ScreenDescriptor]
     ) -> NotificationWindowMoveEvaluation {
         let decision = NotificationMovePolicy.moveDecision(
@@ -74,6 +96,7 @@ final class NotificationWindowPlacementEngine {
             windowSize: snapshot.windowSize,
             screens: screens
         )
+        let targetScreen = ScreenResolutionPolicy.preferredScreen(target: displayTarget, screens: screens) ?? resolvedScreen
 
         let cacheInitialized: Bool
         let initialPositionRecalculated: Bool
@@ -100,15 +123,12 @@ final class NotificationWindowPlacementEngine {
 
         let cache = cache!
         let resetPosition = snapshot.notificationPosition != cache.initialPosition ? cache.initialPosition : nil
-        let referenceScreen = ScreenResolutionPolicy.resolveScreen(
-            position: cache.initialPosition,
-            windowSize: cache.initialWindowSize,
-            screens: screens
-        )
+        let referenceScreen = targetScreen
+        let targetWindowSize = referenceScreen.map(\.frame.size) ?? cache.initialWindowSize
         let dockSize = referenceScreen.map(ScreenResolutionPolicy.dockSize(for:)) ?? 0
         let target = NotificationGeometry.newPosition(
             currentPosition: currentPosition,
-            windowSize: cache.initialWindowSize,
+            windowSize: targetWindowSize,
             notifSize: cache.initialNotificationSize,
             position: cache.initialPosition,
             padding: cache.initialPadding,

@@ -1,6 +1,20 @@
 import CoreGraphics
 
 enum ScreenResolutionPolicy {
+    static func preferredScreen(
+        target: NotificationDisplayTarget,
+        screens: [ScreenDescriptor]
+    ) -> ScreenDescriptor? {
+        guard !screens.isEmpty else { return nil }
+
+        switch target {
+        case .mainDisplay:
+            return screens.first(where: \.isMain) ?? screens.first
+        case .builtInDisplay:
+            return screens.first(where: \.isBuiltIn) ?? screens.first(where: \.isMain) ?? screens.first
+        }
+    }
+
     static func resolveScreen(
         position: CGPoint,
         windowSize: CGSize,
@@ -19,7 +33,7 @@ enum ScreenResolutionPolicy {
             return bySize
         }
 
-        return screens.first(where: \.isMain) ?? screens.first
+        return preferredScreen(target: .mainDisplay, screens: screens)
     }
 
     static func dockSize(for screen: ScreenDescriptor) -> CGFloat {
