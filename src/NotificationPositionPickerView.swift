@@ -13,7 +13,9 @@ final class NotificationPositionPickerView: NSView {
             width: contentInsets.left + gridSize.width + 12,
             height: 230
         )
-        static let indicatorSize = CGSize(width: 24, height: 13)
+        static let screenCornerRadius: CGFloat = 8
+        static let zoneCornerRadius: CGFloat = screenCornerRadius
+        static let indicatorSize = CGSize(width: 28, height: 13)
         static let indicatorInset: CGFloat = 8
     }
 
@@ -155,6 +157,8 @@ final class NotificationPositionPickerView: NSView {
     }
 
     private func drawGrid() {
+        drawScreenBackground()
+
         for row in 0 ..< NotificationPositionGridLayout.rows.count {
             for column in 0 ..< NotificationPositionGridLayout.rows[row].count {
                 guard let position = NotificationPositionGridLayout.position(row: row, column: column) else {
@@ -165,26 +169,50 @@ final class NotificationPositionPickerView: NSView {
         }
     }
 
+    private func drawScreenBackground() {
+        let screenPath = NSBezierPath(
+            roundedRect: gridFrame,
+            xRadius: Metrics.screenCornerRadius,
+            yRadius: Metrics.screenCornerRadius
+        )
+
+        NSGraphicsContext.saveGraphicsState()
+        screenPath.addClip()
+
+        let gradient = NSGradient(colors: screenWallpaperColors())!
+        gradient.draw(in: gridFrame, angle: 135)
+
+        NSGraphicsContext.restoreGraphicsState()
+
+        screenBorderColor().setStroke()
+        screenPath.lineWidth = 1
+        screenPath.stroke()
+    }
+
     private func drawCell(atRow row: Int, column: Int, position: NotificationPosition) {
         let cellRect = self.cellRect(row: row, column: column)
-        let cellPath = NSBezierPath(roundedRect: cellRect, xRadius: 8, yRadius: 8)
+        let cellPath = NSBezierPath(
+            roundedRect: cellRect,
+            xRadius: Metrics.zoneCornerRadius,
+            yRadius: Metrics.zoneCornerRadius
+        )
 
         let isSelected = position == selectedPosition
         let isHovered = position == hoveredPosition
 
         let fillColor: NSColor
         if isSelected {
-            fillColor = NSColor.controlAccentColor.withAlphaComponent(0.08)
+            fillColor = NSColor.controlAccentColor.withAlphaComponent(0.13)
         } else if isHovered {
-            fillColor = NSColor.controlAccentColor.withAlphaComponent(0.14)
+            fillColor = NSColor.controlAccentColor.withAlphaComponent(0.22)
         } else {
-            fillColor = .clear
+            fillColor = zoneFillColor()
         }
 
         fillColor.setFill()
         cellPath.fill()
 
-        let strokeColor: NSColor = isSelected ? .controlAccentColor : .separatorColor
+        let strokeColor: NSColor = isSelected ? .controlAccentColor : zoneBorderColor()
         strokeColor.setStroke()
         cellPath.lineWidth = isSelected ? 1.5 : 1
         cellPath.stroke()
@@ -262,5 +290,46 @@ final class NotificationPositionPickerView: NSView {
         }
 
         return CGRect(origin: CGPoint(x: originX, y: originY), size: Metrics.indicatorSize)
+    }
+
+    private func screenWallpaperColors() -> [NSColor] {
+        if isDarkAppearance {
+            return [
+                NSColor(calibratedRed: 0.15, green: 0.21, blue: 0.34, alpha: 1),
+                NSColor(calibratedRed: 0.11, green: 0.14, blue: 0.28, alpha: 1),
+                NSColor(calibratedRed: 0.21, green: 0.11, blue: 0.27, alpha: 1),
+            ]
+        }
+
+        return [
+            NSColor(calibratedRed: 0.78, green: 0.87, blue: 0.98, alpha: 1),
+            NSColor(calibratedRed: 0.60, green: 0.79, blue: 0.96, alpha: 1),
+            NSColor(calibratedRed: 0.90, green: 0.71, blue: 0.84, alpha: 1),
+        ]
+    }
+
+    private func screenBorderColor() -> NSColor {
+        if isDarkAppearance {
+            return NSColor.white.withAlphaComponent(0.14)
+        }
+        return NSColor.black.withAlphaComponent(0.10)
+    }
+
+    private func zoneFillColor() -> NSColor {
+        if isDarkAppearance {
+            return NSColor.white.withAlphaComponent(0.04)
+        }
+        return NSColor.white.withAlphaComponent(0.18)
+    }
+
+    private func zoneBorderColor() -> NSColor {
+        if isDarkAppearance {
+            return NSColor.white.withAlphaComponent(0.10)
+        }
+        return NSColor.black.withAlphaComponent(0.08)
+    }
+
+    private var isDarkAppearance: Bool {
+        effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
 }
