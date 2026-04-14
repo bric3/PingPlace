@@ -11,6 +11,8 @@ protocol NotificationCenterAXClient {
     @discardableResult
     func setPosition(_ element: AXUIElement, point: CGPoint) -> AXError
     func firstElement(root: AXUIElement, targetSubroles: [String]) -> AXUIElement?
+    func hasSystemWideFocusedApplication(pid: pid_t) -> Bool
+    func hasSystemWideFocusedWindow(pid: pid_t) -> Bool
     func hasFocusedWindow(pid: pid_t) -> Bool
     func hasWidgetUI(pid: pid_t) -> Bool
     func role(of element: AXUIElement) -> String?
@@ -92,6 +94,32 @@ struct SystemNotificationCenterAXClient: NotificationCenterAXClient {
                 return targetSubroles.contains(subrole)
             }
         )
+    }
+
+    func hasSystemWideFocusedApplication(pid: pid_t) -> Bool {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedApplicationRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedApplicationAttribute as CFString, &focusedApplicationRef) == .success,
+              let focusedApplicationRef else {
+            return false
+        }
+        let focusedApplication = focusedApplicationRef as! AXUIElement
+        var focusedApplicationPID: pid_t = 0
+        AXUIElementGetPid(focusedApplication, &focusedApplicationPID)
+        return focusedApplicationPID == pid
+    }
+
+    func hasSystemWideFocusedWindow(pid: pid_t) -> Bool {
+        let systemWide = AXUIElementCreateSystemWide()
+        var focusedWindowRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(systemWide, kAXFocusedWindowAttribute as CFString, &focusedWindowRef) == .success,
+              let focusedWindowRef else {
+            return false
+        }
+        let focusedWindow = focusedWindowRef as! AXUIElement
+        var focusedWindowPID: pid_t = 0
+        AXUIElementGetPid(focusedWindow, &focusedWindowPID)
+        return focusedWindowPID == pid
     }
 
     func hasFocusedWindow(pid: pid_t) -> Bool {

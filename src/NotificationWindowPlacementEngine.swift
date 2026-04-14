@@ -37,6 +37,7 @@ struct NotificationWindowCache: Equatable {
     let initialNotificationSize: CGSize
     let initialPadding: CGFloat
     let windowIdentifier: String?
+    let resolvedScreenFrame: CGRect?
     let referenceScreenFrame: CGRect?
 }
 
@@ -99,7 +100,9 @@ final class NotificationWindowPlacementEngine {
         )
         let targetScreen = ScreenResolutionPolicy.preferredScreen(target: displayTarget, screens: screens) ?? resolvedScreen
 
-        if cache?.referenceScreenFrame != targetScreen?.frame {
+        if cache?.resolvedScreenFrame != resolvedScreen?.frame
+            || cache?.referenceScreenFrame != targetScreen?.frame
+        {
             cache = nil
         }
 
@@ -122,6 +125,7 @@ final class NotificationWindowPlacementEngine {
                 initialNotificationSize: snapshot.notificationSize,
                 initialPadding: geometry.padding,
                 windowIdentifier: snapshot.identifier,
+                resolvedScreenFrame: resolvedScreen?.frame,
                 referenceScreenFrame: targetScreen?.frame
             )
             cacheInitialized = true

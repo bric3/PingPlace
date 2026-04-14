@@ -3,10 +3,8 @@ enum NotificationCenterStatePolicy {
         signal: NotificationCenterPanelSignal,
         wasPreviouslyOpen: Bool
     ) -> Bool {
-        if signal.hasFocusedWindow {
-            return true
-        }
-        if wasPreviouslyOpen, signal.hasWidgetUI {
+        _ = wasPreviouslyOpen
+        if signal.hasSystemWideFocusedApplication || signal.hasSystemWideFocusedWindow {
             return true
         }
         return false

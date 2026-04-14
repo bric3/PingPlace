@@ -15,8 +15,22 @@ struct ScreenDescriptor: Equatable {
 }
 
 struct NotificationCenterPanelSignal: Equatable {
+    let hasSystemWideFocusedApplication: Bool
+    let hasSystemWideFocusedWindow: Bool
     let hasFocusedWindow: Bool
     let hasWidgetUI: Bool
+
+    init(
+        hasFocusedWindow: Bool,
+        hasWidgetUI: Bool,
+        hasSystemWideFocusedApplication: Bool = false,
+        hasSystemWideFocusedWindow: Bool = false
+    ) {
+        self.hasSystemWideFocusedApplication = hasSystemWideFocusedApplication
+        self.hasSystemWideFocusedWindow = hasSystemWideFocusedWindow
+        self.hasFocusedWindow = hasFocusedWindow
+        self.hasWidgetUI = hasWidgetUI
+    }
 }
 
 enum NotificationMoveDecision: Equatable {

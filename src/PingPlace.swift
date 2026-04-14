@@ -769,16 +769,24 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
 
     func hasNotificationCenterUI() -> Bool {
         guard let pid = axClient.notificationCenterProcessIdentifier(bundleID: notificationCenterBundleID) else { return false }
-        return axClient.hasFocusedWindow(pid: pid)
+        return axClient.hasSystemWideFocusedApplication(pid: pid)
+            || axClient.hasSystemWideFocusedWindow(pid: pid)
     }
 
     func notificationCenterPanelSignal() -> NotificationCenterPanelSignal {
         guard let pid = axClient.notificationCenterProcessIdentifier(bundleID: notificationCenterBundleID) else {
-            return NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
+            return NotificationCenterPanelSignal(
+                hasFocusedWindow: false,
+                hasWidgetUI: false,
+                hasSystemWideFocusedApplication: false,
+                hasSystemWideFocusedWindow: false
+            )
         }
         return NotificationCenterPanelSignal(
             hasFocusedWindow: axClient.hasFocusedWindow(pid: pid),
-            hasWidgetUI: axClient.hasWidgetUI(pid: pid)
+            hasWidgetUI: axClient.hasWidgetUI(pid: pid),
+            hasSystemWideFocusedApplication: axClient.hasSystemWideFocusedApplication(pid: pid),
+            hasSystemWideFocusedWindow: axClient.hasSystemWideFocusedWindow(pid: pid)
         )
     }
 

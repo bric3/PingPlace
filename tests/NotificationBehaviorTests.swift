@@ -100,7 +100,12 @@ private final class TestControllerDelegate: NotificationControllerDelegate {
     var currentPosition: NotificationPosition = .deadCenter
     var currentDisplayTarget: NotificationDisplayTarget = .mainDisplay
     var screenSummary = "screens=[test]"
-    var panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
+    var panelSignal = NotificationCenterPanelSignal(
+        hasFocusedWindow: false,
+        hasWidgetUI: false,
+        hasSystemWideFocusedApplication: false,
+        hasSystemWideFocusedWindow: false
+    )
     var moveResults: [Bool] = []
     var moveScanResults: [NotificationScanResult] = []
     private(set) var moveReasons: [String] = []
@@ -143,7 +148,7 @@ private final class TestControllerDelegate: NotificationControllerDelegate {
     }
 
     func hasNotificationCenterUI() -> Bool {
-        panelSignal.hasFocusedWindow
+        panelSignal.hasSystemWideFocusedApplication || panelSignal.hasSystemWideFocusedWindow
     }
 }
 
@@ -603,13 +608,49 @@ private func testNotificationCenterStateChangeDetectsNoChange() throws {
     )
 }
 
-private func testPanelOpenSignalUsesFocusedWindowAsPrimarySignal() throws {
+private func testPanelOpenSignalUsesSystemWideFocusedApplicationAsPrimarySignal() throws {
     try assertTrue(
         NotificationCenterStatePolicy.isPanelOpen(
-            signal: NotificationCenterPanelSignal(hasFocusedWindow: true, hasWidgetUI: false),
+            signal: NotificationCenterPanelSignal(
+                hasFocusedWindow: false,
+                hasWidgetUI: false,
+                hasSystemWideFocusedApplication: true,
+                hasSystemWideFocusedWindow: false
+            ),
             wasPreviouslyOpen: false
         ),
-        "focused window should mark the panel as open"
+        "system-wide focused application should mark the panel as open"
+    )
+}
+
+private func testPanelOpenSignalUsesSystemWideFocusedWindowAsPrimarySignal() throws {
+    try assertTrue(
+        NotificationCenterStatePolicy.isPanelOpen(
+            signal: NotificationCenterPanelSignal(
+                hasFocusedWindow: false,
+                hasWidgetUI: false,
+                hasSystemWideFocusedApplication: false,
+                hasSystemWideFocusedWindow: true
+            ),
+            wasPreviouslyOpen: false
+        ),
+        "system-wide focused window should mark the panel as open"
+    )
+}
+
+private func testPanelOpenSignalIgnoresAppLocalFocusedWindowWhenPreviouslyClosed() throws {
+    try assertEqual(
+        NotificationCenterStatePolicy.isPanelOpen(
+            signal: NotificationCenterPanelSignal(
+                hasFocusedWindow: true,
+                hasWidgetUI: false,
+                hasSystemWideFocusedApplication: false,
+                hasSystemWideFocusedWindow: false
+            ),
+            wasPreviouslyOpen: false
+        ),
+        false,
+        "app-local focused window should not reopen the panel from a closed state"
     )
 }
 
@@ -625,12 +666,13 @@ private func testPanelOpenSignalIgnoresWidgetSignalWhenPreviouslyClosed() throws
 }
 
 private func testPanelOpenSignalUsesWidgetSignalOnlyAsOpenContinuity() throws {
-    try assertTrue(
+    try assertEqual(
         NotificationCenterStatePolicy.isPanelOpen(
             signal: NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: true),
             wasPreviouslyOpen: true
         ),
-        "widget signal should only keep the panel open when it was already open"
+        false,
+        "widget signal alone should not keep the panel open once system-wide focus is gone"
     )
 }
 
@@ -818,7 +860,12 @@ private func testControllerWidgetCloseTriggersMoveWhenNotTopRight() throws {
         recoveryRetryLimit: 10
     )
 
-    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: true, hasWidgetUI: true)
+    delegate.panelSignal = NotificationCenterPanelSignal(
+        hasFocusedWindow: true,
+        hasWidgetUI: true,
+        hasSystemWideFocusedApplication: true,
+        hasSystemWideFocusedWindow: true
+    )
     controller.handleWidgetMonitorTick()
     delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
     controller.handleWidgetMonitorTick()
@@ -838,7 +885,12 @@ private func testControllerWidgetCloseSchedulesRetryWhenNoMoveOccurs() throws {
         recoveryRetryLimit: 10
     )
 
-    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: true, hasWidgetUI: true)
+    delegate.panelSignal = NotificationCenterPanelSignal(
+        hasFocusedWindow: true,
+        hasWidgetUI: true,
+        hasSystemWideFocusedApplication: true,
+        hasSystemWideFocusedWindow: true
+    )
     controller.handleWidgetMonitorTick()
     delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
     controller.handleWidgetMonitorTick()
@@ -865,7 +917,12 @@ private func testControllerWidgetCloseDoesNotTriggerMoveWhenTopRight() throws {
         recoveryRetryLimit: 10
     )
 
-    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: true, hasWidgetUI: true)
+    delegate.panelSignal = NotificationCenterPanelSignal(
+        hasFocusedWindow: true,
+        hasWidgetUI: true,
+        hasSystemWideFocusedApplication: true,
+        hasSystemWideFocusedWindow: true
+    )
     controller.handleWidgetMonitorTick()
     delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
     controller.handleWidgetMonitorTick()
@@ -948,7 +1005,12 @@ private func testControllerWidgetCloseTriggersMoveWhenTopRightTargetsBuiltInDisp
         recoveryRetryLimit: 10
     )
 
-    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: true, hasWidgetUI: true)
+    delegate.panelSignal = NotificationCenterPanelSignal(
+        hasFocusedWindow: true,
+        hasWidgetUI: true,
+        hasSystemWideFocusedApplication: true,
+        hasSystemWideFocusedWindow: true
+    )
     controller.handleWidgetMonitorTick()
     delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: false)
     controller.handleWidgetMonitorTick()
@@ -960,8 +1022,10 @@ private func testControllerWidgetCloseTriggersMoveWhenTopRightTargetsBuiltInDisp
     )
 }
 
-private func testControllerKeepsPanelOpenWhenFocusDropsButWidgetSignalRemains() throws {
+private func testControllerClosesPanelWhenFocusDropsEvenIfWidgetSignalRemains() throws {
     let delegate = TestControllerDelegate()
+    delegate.currentPosition = .deadCenter
+    delegate.moveResults = [true]
     let scheduler = TestScheduler()
     let controller = NotificationController(
         delegate: delegate,
@@ -970,16 +1034,25 @@ private func testControllerKeepsPanelOpenWhenFocusDropsButWidgetSignalRemains() 
         recoveryRetryLimit: 10
     )
 
-    delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: true, hasWidgetUI: true)
+    delegate.panelSignal = NotificationCenterPanelSignal(
+        hasFocusedWindow: true,
+        hasWidgetUI: true,
+        hasSystemWideFocusedApplication: true,
+        hasSystemWideFocusedWindow: true
+    )
     controller.handleWidgetMonitorTick()
     delegate.panelSignal = NotificationCenterPanelSignal(hasFocusedWindow: false, hasWidgetUI: true)
     controller.handleWidgetMonitorTick()
 
-    try assertEqual(delegate.moveReasons, [], "panel should remain open when widget signal persists after focus drops")
+    try assertEqual(
+        delegate.moveReasons,
+        ["notificationCenterClosed"],
+        "panel close should trigger recovery move as soon as system-wide focus leaves Notification Center"
+    )
     try assertEqual(
         delegate.loggedMessages.filter { $0.contains("Notification Center state changed") }.count,
-        1,
-        "continuity signal should not emit a close transition"
+        2,
+        "focus loss should emit a close transition even if widget nodes remain"
     )
 }
 
@@ -1338,6 +1411,52 @@ private func testPlacementEngineRequestsResetToCachedPosition() throws {
     try assertEqual(plan.targetPosition.y, 877.5, "repeated banner target y")
 }
 
+private func testPlacementEngineResetsCachedGeometryWhenResolvedScreenChanges() throws {
+    let engine = NotificationWindowPlacementEngine(paddingAboveDock: 30)
+    _ = engine.evaluateMove(
+        snapshot: NotificationWindowSnapshot(
+            identifier: "banner-1",
+            focused: false,
+            isNotificationCenterPanelOpen: false,
+            notificationSubrole: "AXNotificationCenterAlert",
+            rootWindowPosition: CGPoint(x: 0, y: 0),
+            windowSize: CGSize(width: 3360, height: 1890),
+            notificationSize: CGSize(width: 344, height: 57),
+            notificationPosition: CGPoint(x: 3000, y: 46)
+        ),
+        currentPosition: .deadCenter,
+        displayTarget: .mainDisplay,
+        screens: dualScreenLayout
+    )
+
+    let evaluation = engine.evaluateMove(
+        snapshot: NotificationWindowSnapshot(
+            identifier: "banner-1",
+            focused: false,
+            isNotificationCenterPanelOpen: false,
+            notificationSubrole: "AXNotificationCenterAlert",
+            rootWindowPosition: CGPoint(x: 776, y: 1890),
+            windowSize: CGSize(width: 1800, height: 1169),
+            notificationSize: CGSize(width: 344, height: 57),
+            notificationPosition: CGPoint(x: 2216, y: 1945)
+        ),
+        currentPosition: .deadCenter,
+        displayTarget: .mainDisplay,
+        screens: [
+            ScreenDescriptor(frame: CGRect(x: 0, y: 0, width: 3360, height: 1890), visibleFrame: CGRect(x: 0, y: 31, width: 3360, height: 1859), isMain: true, isBuiltIn: false),
+            ScreenDescriptor(frame: CGRect(x: 776, y: 1890, width: 1800, height: 1169), visibleFrame: CGRect(x: 776, y: 1930, width: 1800, height: 1129), isMain: false, isBuiltIn: true),
+        ]
+    )
+
+    guard case let .move(plan) = evaluation else {
+        throw TestFailure.assertionFailed("placement engine should produce a move plan when the host window moves to another screen")
+    }
+
+    try assertTrue(plan.cacheInitialized, "changing the resolved source screen should reinitialize cached geometry")
+    try assertEqual(plan.targetPosition.x, 68, "main-display target x should be recomputed from the laptop-hosted local offset")
+    try assertEqual(plan.targetBannerPosition.x, 1508, "main-display banner x should remain centered after opening and closing Notification Center on another screen")
+}
+
 private func testPlacementEngineRebasesRootWindowWhenSwitchingFromMainToBuiltInDisplay() throws {
     let engine = NotificationWindowPlacementEngine(paddingAboveDock: 30)
     let evaluation = engine.evaluateMove(
@@ -1665,9 +1784,11 @@ struct NotificationBehaviorTestRunner {
             ("notification center detects open transition", testNotificationCenterStateChangeDetectsOpen),
             ("notification center detects close transition", testNotificationCenterStateChangeDetectsClose),
             ("notification center detects unchanged state", testNotificationCenterStateChangeDetectsNoChange),
-            ("panel open signal uses focused window as primary signal", testPanelOpenSignalUsesFocusedWindowAsPrimarySignal),
+            ("panel open signal uses system-wide focused application as primary signal", testPanelOpenSignalUsesSystemWideFocusedApplicationAsPrimarySignal),
+            ("panel open signal uses system-wide focused window as primary signal", testPanelOpenSignalUsesSystemWideFocusedWindowAsPrimarySignal),
+            ("panel open signal ignores app-local focused window when previously closed", testPanelOpenSignalIgnoresAppLocalFocusedWindowWhenPreviouslyClosed),
             ("panel open signal ignores widget signal when previously closed", testPanelOpenSignalIgnoresWidgetSignalWhenPreviouslyClosed),
-            ("panel open signal uses widget signal only as open continuity", testPanelOpenSignalUsesWidgetSignalOnlyAsOpenContinuity),
+            ("panel open signal ignores widget-only continuity once focus leaves", testPanelOpenSignalUsesWidgetSignalOnlyAsOpenContinuity),
             ("recovery retries when attempts remain", testRecoveryRetryActionRetriesWhenNoMoveAndAttemptsRemain),
             ("recovery stops after successful move", testRecoveryRetryActionStopsAfterSuccessfulMove),
             ("recovery stops at attempt limit", testRecoveryRetryActionStopsAtAttemptLimit),
@@ -1686,7 +1807,7 @@ struct NotificationBehaviorTestRunner {
             ("controller notification created cancels previous settle follow-up", testControllerNotificationWindowCreatedCancelsPreviousSettleFollowUp),
             ("controller notification created skips settle follow-ups when not needed", testControllerNotificationWindowCreatedSkipsSettleFollowUpsWhenNotNeeded),
             ("controller widget close moves top-right when built-in display is targeted", testControllerWidgetCloseTriggersMoveWhenTopRightTargetsBuiltInDisplay),
-            ("controller keeps panel open when focus drops but widget signal remains", testControllerKeepsPanelOpenWhenFocusDropsButWidgetSignalRemains),
+            ("controller closes panel when focus drops even if widget signal remains", testControllerClosesPanelWhenFocusDropsEvenIfWidgetSignalRemains),
             ("controller invalidate cancels retry", testControllerInvalidateCancelsScheduledRetry),
             ("controller stops retrying at limit", testControllerStopsRetryingAfterAttemptLimit),
             ("controller keeps retrying for delayed screen change notifications", testControllerKeepsRetryingLongEnoughForDelayedScreenChangeNotifications),
@@ -1699,6 +1820,7 @@ struct NotificationBehaviorTestRunner {
             ("placement engine resets cached geometry when display target changes", testPlacementEngineResetsCachedGeometryWhenDisplayTargetChanges),
             ("placement engine resets cache when identifier changes", testPlacementEngineResetsCacheWhenIdentifierChanges),
             ("placement engine requests reset to cached position", testPlacementEngineRequestsResetToCachedPosition),
+            ("placement engine resets cached geometry when resolved screen changes", testPlacementEngineResetsCachedGeometryWhenResolvedScreenChanges),
             ("placement engine rebases root window when switching from main to built-in display", testPlacementEngineRebasesRootWindowWhenSwitchingFromMainToBuiltInDisplay),
             ("placement engine skips focused window", testPlacementEngineSkipsFocusedWindow),
             ("placement engine skips widget window", testPlacementEngineSkipsWidgetWindow),

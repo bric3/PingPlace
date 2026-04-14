@@ -12,7 +12,7 @@ enum NotificationMovePolicy {
         if let identifier, identifier.hasPrefix("widget") {
             return .skipWidget
         }
-        if focused {
+        if focused, shouldSkipForFocusedWindow(notificationSubrole: notificationSubrole) {
             return .skipFocused
         }
         return .move
@@ -33,6 +33,15 @@ enum NotificationMovePolicy {
              "AXNotificationCenterNotification",
              "AXNotificationCenterBannerWindow":
             return true
+        default:
+            return true
+        }
+    }
+
+    private static func shouldSkipForFocusedWindow(notificationSubrole: String?) -> Bool {
+        switch notificationSubrole {
+        case "AXNotificationCenterAlert":
+            return false
         default:
             return true
         }
