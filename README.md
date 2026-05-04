@@ -4,11 +4,11 @@ Control notification position on macOS.
 
 | Menu | Notification moved |
 | --- | --- |
-| ![PingPlace menu](.github/menu-screenshot.png) | ![Notification moved to top left](.github/moved-notification-to-top-left.png) |
-
-As seen in [Lifehacker](https://lifehacker.com/tech/change-where-macos-notifications-show-up)
+| ![PingPlace menu](.github/menu-screenshot.png)<br>![PingPlace display menu](.github/menu-display-screenshot.png) | ![Notification moved to top left](.github/moved-notification-to-top-left.png) |
 
 ## Fork changes
+
+This app is almost a complete rewrite to the original [PingPlace](https://github.com/NotWadeGrimridge/PingPlace), here's the change from 1.3.1.
 
 - Handles system sleep and lid close
 - External monitors plug/unplug, including different resolutions
@@ -20,20 +20,22 @@ As seen in [Lifehacker](https://lifehacker.com/tech/change-where-macos-notificat
 
 ## Installation
 
-Local build only.
-Clone, then build.
+Clone, build with `make build`, then copy to `/Applications` or `$HOME/Applications` folder.
+
+XCode is needed.
 
 ## Usage
 
-The app needs accessibility permissions to work. It lives in the top bar. You can set notifications to appear in eight positions:
+The app needs accessibility permissions to work. It lives in the top bar. You can set notifications to appear in nine positions:
 
 - Top Left
-- Top Middle (default)
+- Top Center (default)
 - Top Right (macOS default)
 - Middle Left
+- Middle Center
 - Middle Right
 - Bottom Left
-- Bottom Middle
+- Bottom Center
 - Bottom Right
 
 For local development, debugging, and test workflows, see `CONTRIBUTING.md`.
