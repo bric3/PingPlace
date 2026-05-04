@@ -62,6 +62,13 @@ final class NotificationController {
         pollingEndTime = Date().addingTimeInterval(6.5)
     }
 
+    func handleApplicationDidFinishLaunching() {
+        guard let delegate else { return }
+        delegate.clearCachedNotificationGeometry()
+        delegate.debugLog("Recomputing notification placement after launch. \(delegate.screenTopologySummary())")
+        triggerRecoveryReposition(reason: "applicationDidFinishLaunching")
+    }
+
     func handleWake() {
         guard let delegate else { return }
         delegate.debugLog("System did wake. \(delegate.screenTopologySummary())")

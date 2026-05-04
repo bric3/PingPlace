@@ -158,7 +158,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         }
         startSettingsFileWatchIfNeeded()
         if launchMode != .menuPreview {
-            moveAllNotifications(reason: "applicationDidFinishLaunching")
+            controller.handleApplicationDidFinishLaunching()
         }
     }
 
@@ -508,8 +508,12 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             )
             return .noBannerContainer
         }
+        let cacheIdentifier = NotificationMovePolicy.cacheIdentifier(
+            windowIdentifier: windowIdentifier,
+            notificationIdentifier: bannerIdentifier
+        )
         let snapshot = NotificationWindowSnapshot(
-            identifier: windowIdentifier,
+            identifier: cacheIdentifier,
             focused: focusedWindow,
             isNotificationCenterPanelOpen: hasNotificationCenterUI(),
             notificationSubrole: bannerSubrole,
@@ -663,26 +667,41 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
 
         var movedAny = false
         var foundBannerContainer = false
+        var movedCount = 0
+        var nonMovableCount = 0
+        var noBannerContainerCount = 0
         for (index, window) in windows.enumerated() {
             debugLog("Inspecting Notification Center window \(index + 1)/\(windows.count): \(windowFingerprint(window: window, identifier: axClient.windowIdentifier(window), focused: axClient.isFocused(window), windowSize: axClient.size(of: window), notifPosition: axClient.position(of: window)))")
             switch moveNotificationResult(window) {
             case .moved:
                 movedAny = true
                 foundBannerContainer = true
+                movedCount += 1
             case .nonMovableCandidate:
                 foundBannerContainer = true
+                nonMovableCount += 1
             case .noBannerContainer:
-                break
+                noBannerContainerCount += 1
             }
         }
-        debugLog("moveAllNotifications completed (\(reason)): movedAny=\(movedAny), windows=\(windows.count)")
+        let scanResult: NotificationScanResult
         if movedAny {
-            return .movedNotification
+            scanResult = .movedNotification
+        } else if !foundBannerContainer, !windows.isEmpty {
+            scanResult = .placeholderOnly
+        } else {
+            scanResult = .noMovableCandidates
         }
-        if !foundBannerContainer, !windows.isEmpty {
-            return .placeholderOnly
-        }
-        return .noMovableCandidates
+        debugLog(
+            "moveAllNotifications completed (\(reason)): " +
+                "movedAny=\(movedAny), " +
+                "windows=\(windows.count), " +
+                "moved=\(movedCount), " +
+                "nonMovable=\(nonMovableCount), " +
+                "noBannerContainer=\(noBannerContainerCount), " +
+                "scanResult=\(notificationScanResultSummary(scanResult))"
+        )
+        return scanResult
     }
 
     @objc func showAbout() {
@@ -792,14 +811,51 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
 
     func notificationCenterWindowCreated(_ element: AXUIElement) {
         let moveResult = moveNotificationResult(element)
-        let needsSettleFollowUp: Bool
-        switch moveResult {
-        case let .moved(shouldSettle):
-            needsSettleFollowUp = shouldSettle
-        case .noBannerContainer, .nonMovableCandidate:
-            needsSettleFollowUp = false
+        let needsSettleFollowUp = NotificationMovePolicy.shouldScheduleSettleFollowUp(
+            windowCreatedMoveResult: notificationWindowCreatedMoveResult(from: moveResult)
+        )
+        debugLog(
+            "Window created event result: " +
+                "moveResult=\(windowMoveResultSummary(moveResult)), " +
+                "scheduleSettleFollowUp=\(needsSettleFollowUp)"
+        )
+        if needsSettleFollowUp {
+            debugLog("Window created event scheduled notification settle follow-up.")
         }
         controller.handleNotificationWindowCreated(needsSettleFollowUp: needsSettleFollowUp)
+    }
+
+    private func notificationWindowCreatedMoveResult(from result: WindowMoveResult) -> NotificationWindowCreatedMoveResult {
+        switch result {
+        case let .moved(needsSettleFollowUp):
+            return .moved(needsSettleFollowUp: needsSettleFollowUp)
+        case .noBannerContainer:
+            return .noBannerContainer
+        case .nonMovableCandidate:
+            return .nonMovableCandidate
+        }
+    }
+
+    private func windowMoveResultSummary(_ result: WindowMoveResult) -> String {
+        switch result {
+        case let .moved(needsSettleFollowUp):
+            return "moved(needsSettleFollowUp:\(needsSettleFollowUp))"
+        case .noBannerContainer:
+            return "noBannerContainer"
+        case .nonMovableCandidate:
+            return "nonMovableCandidate"
+        }
+    }
+
+    private func notificationScanResultSummary(_ result: NotificationScanResult) -> String {
+        switch result {
+        case .movedNotification:
+            return "movedNotification"
+        case .noMovableCandidates:
+            return "noMovableCandidates"
+        case .placeholderOnly:
+            return "placeholderOnly"
+        }
     }
 
     func notificationCenterStateMonitorTick() {

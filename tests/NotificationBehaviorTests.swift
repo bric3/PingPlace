@@ -575,6 +575,65 @@ private func testCacheDoesNotResetWithoutIdentifiers() throws {
     )
 }
 
+private func testCacheIdentifierPrefersNotificationIdentifier() throws {
+    try assertEqual(
+        NotificationMovePolicy.cacheIdentifier(
+            windowIdentifier: nil,
+            notificationIdentifier: "notification-1"
+        ),
+        "notification-1",
+        "cache should use the notification identifier when available"
+    )
+}
+
+private func testCacheIdentifierFallsBackToWindowIdentifier() throws {
+    try assertEqual(
+        NotificationMovePolicy.cacheIdentifier(
+            windowIdentifier: "window-1",
+            notificationIdentifier: nil
+        ),
+        "window-1",
+        "cache should fall back to the window identifier when no notification identifier is available"
+    )
+}
+
+private func testWindowCreatedPlaceholderSchedulesSettleFollowUp() throws {
+    try assertEqual(
+        NotificationMovePolicy.shouldScheduleSettleFollowUp(
+            windowCreatedMoveResult: .noBannerContainer
+        ),
+        true,
+        "placeholder window creation should schedule settle follow-up"
+    )
+}
+
+private func testWindowCreatedMovedUsesMoveResultSettleDecision() throws {
+    try assertEqual(
+        NotificationMovePolicy.shouldScheduleSettleFollowUp(
+            windowCreatedMoveResult: .moved(needsSettleFollowUp: true)
+        ),
+        true,
+        "moved window creation should preserve settle follow-up requirement"
+    )
+    try assertEqual(
+        NotificationMovePolicy.shouldScheduleSettleFollowUp(
+            windowCreatedMoveResult: .moved(needsSettleFollowUp: false)
+        ),
+        false,
+        "moved window creation should skip settle follow-up when the move already landed correctly"
+    )
+}
+
+private func testWindowCreatedNonMovableSkipsSettleFollowUp() throws {
+    try assertEqual(
+        NotificationMovePolicy.shouldScheduleSettleFollowUp(
+            windowCreatedMoveResult: .nonMovableCandidate
+        ),
+        false,
+        "non-movable window creation should not schedule settle follow-up"
+    )
+}
+
 private func testNotificationCenterStateChangeDetectsOpen() throws {
     try assertEqual(
         NotificationCenterStatePolicy.stateChange(
@@ -782,6 +841,47 @@ private func testControllerWakeClearsCacheAndTriggersMove() throws {
     try assertEqual(delegate.clearCacheCallCount, 1, "wake should clear cached geometry")
     try assertEqual(delegate.moveReasons, ["didWakeNotification"], "wake should trigger immediate move")
     try assertEqual(scheduler.scheduledActions.count, 0, "wake should not schedule retry after successful move")
+}
+
+private func testControllerLaunchClearsCacheAndTriggersMove() throws {
+    let delegate = TestControllerDelegate()
+    delegate.moveResults = [true]
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 10
+    )
+
+    controller.handleApplicationDidFinishLaunching()
+
+    try assertEqual(delegate.clearCacheCallCount, 1, "launch should clear cached geometry")
+    try assertEqual(delegate.moveReasons, ["applicationDidFinishLaunching"], "launch should trigger immediate move")
+    try assertEqual(scheduler.scheduledActions.count, 0, "launch should not schedule retry after successful move")
+}
+
+private func testControllerLaunchSchedulesRetryWhenNoMoveOccurs() throws {
+    let delegate = TestControllerDelegate()
+    delegate.moveResults = [false, true]
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 10
+    )
+
+    controller.handleApplicationDidFinishLaunching()
+    try assertEqual(delegate.moveReasons, ["applicationDidFinishLaunching"], "launch should try immediate move first")
+    try assertEqual(scheduler.scheduledActions.count, 1, "launch should schedule retry after failed move")
+
+    scheduler.runNext()
+    try assertEqual(
+        delegate.moveReasons,
+        ["applicationDidFinishLaunching", "applicationDidFinishLaunching-retry1"],
+        "launch retry should use suffixed reason"
+    )
 }
 
 private func testControllerScreenChangeSchedulesRetryWhenNoMoveOccurs() throws {
@@ -1781,6 +1881,11 @@ struct NotificationBehaviorTestRunner {
             ("move decision allows alerts while panel is open", testMoveDecisionAllowsAlertsWhilePanelIsOpen),
             ("cache resets when window identifier changes", testCacheResetWhenWindowIdentifierChanges),
             ("cache does not reset without identifiers", testCacheDoesNotResetWithoutIdentifiers),
+            ("cache identifier prefers notification identifier", testCacheIdentifierPrefersNotificationIdentifier),
+            ("cache identifier falls back to window identifier", testCacheIdentifierFallsBackToWindowIdentifier),
+            ("window created placeholder schedules settle follow-up", testWindowCreatedPlaceholderSchedulesSettleFollowUp),
+            ("window created moved uses settle decision", testWindowCreatedMovedUsesMoveResultSettleDecision),
+            ("window created non-movable skips settle follow-up", testWindowCreatedNonMovableSkipsSettleFollowUp),
             ("notification center detects open transition", testNotificationCenterStateChangeDetectsOpen),
             ("notification center detects close transition", testNotificationCenterStateChangeDetectsClose),
             ("notification center detects unchanged state", testNotificationCenterStateChangeDetectsNoChange),
@@ -1796,6 +1901,8 @@ struct NotificationBehaviorTestRunner {
             ("iterative traversal finds node in cyclic graph", testFirstMatchingNodeFindsNodeInCyclicGraph),
             ("iterative traversal handles deep graph", testFirstMatchingNodeHandlesDeepGraphWithoutRecursion),
             ("iterative traversal returns nil when no match exists", testFirstMatchingNodeReturnsNilWhenNoMatchExists),
+            ("controller launch clears cache and moves", testControllerLaunchClearsCacheAndTriggersMove),
+            ("controller launch schedules retry", testControllerLaunchSchedulesRetryWhenNoMoveOccurs),
             ("controller wake clears cache and moves", testControllerWakeClearsCacheAndTriggersMove),
             ("controller screen change schedules retry", testControllerScreenChangeSchedulesRetryWhenNoMoveOccurs),
             ("controller session activation clears cache and moves", testControllerSessionActivationClearsCacheAndTriggersMove),

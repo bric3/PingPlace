@@ -1,4 +1,25 @@
+enum NotificationWindowCreatedMoveResult {
+    case moved(needsSettleFollowUp: Bool)
+    case noBannerContainer
+    case nonMovableCandidate
+}
+
 enum NotificationMovePolicy {
+    static func cacheIdentifier(windowIdentifier: String?, notificationIdentifier: String?) -> String? {
+        notificationIdentifier ?? windowIdentifier
+    }
+
+    static func shouldScheduleSettleFollowUp(windowCreatedMoveResult: NotificationWindowCreatedMoveResult) -> Bool {
+        switch windowCreatedMoveResult {
+        case let .moved(needsSettleFollowUp):
+            return needsSettleFollowUp
+        case .noBannerContainer:
+            return true
+        case .nonMovableCandidate:
+            return false
+        }
+    }
+
     static func moveDecision(
         identifier: String?,
         focused: Bool,

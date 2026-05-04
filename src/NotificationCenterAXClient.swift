@@ -1,6 +1,18 @@
 import ApplicationServices
 import Cocoa
 
+enum NotificationCenterAXTraversalPolicy {
+    static let descendantAttributes: [String] = [
+        kAXChildrenAttribute as String,
+        "AXContents",
+        "AXVisibleChildren",
+        "AXRows",
+        "AXColumns",
+        "AXSelectedChildren",
+        "AXTabs",
+    ]
+}
+
 protocol NotificationCenterAXClient {
     func notificationCenterProcessIdentifier(bundleID: String) -> pid_t?
     func notificationWindows(pid: pid_t) -> [AXUIElement]?
@@ -162,11 +174,34 @@ struct SystemNotificationCenterAXClient: NotificationCenterAXClient {
     }
 
     private func children(of element: AXUIElement) -> [AXUIElement] {
-        var childrenRef: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
-              let children = childrenRef as? [AXUIElement] else {
+        var combined: [AXUIElement] = []
+        var seen: Set<AXUIElement> = []
+
+        for attribute in NotificationCenterAXTraversalPolicy.descendantAttributes {
+            for child in attributeElements(of: element, attribute: attribute) where seen.insert(child).inserted {
+                combined.append(child)
+            }
+        }
+
+        return combined
+    }
+
+    private func attributeElements(of element: AXUIElement, attribute: String) -> [AXUIElement] {
+        var valueRef: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &valueRef) == .success,
+              let valueRef else {
             return []
         }
-        return children
+
+        if let children = valueRef as? [AXUIElement] {
+            return children
+        }
+
+        if CFGetTypeID(valueRef) == AXUIElementGetTypeID() {
+            let child = unsafeBitCast(valueRef, to: AXUIElement.self)
+            return [child]
+        }
+
+        return []
     }
 }
