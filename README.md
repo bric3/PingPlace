@@ -24,6 +24,20 @@ Clone, build with `make build`, then copy to `/Applications` or `$HOME/Applicati
 
 XCode is needed.
 
+Hidden settings:
+
+- Enable debug logs:
+  - `defaults write com.grimridge.PingPlace debugMode -bool true`
+- Disable debug logs:
+  - `defaults write com.grimridge.PingPlace debugMode -bool false`
+- Debug log path:
+  - `~/Library/Logs/PingPlace/debug.log`
+- Set notification position:
+  - `defaults write com.grimridge.PingPlace notificationPosition -string deadCenter`
+- Set notification display target:
+  - `defaults write com.grimridge.PingPlace notificationDisplayTarget -string mainDisplay`
+  - `defaults write com.grimridge.PingPlace notificationDisplayTarget -string builtInDisplay`
+
 ## Usage
 
 The app needs accessibility permissions to work. It lives in the top bar. You can set notifications to appear in nine positions:
