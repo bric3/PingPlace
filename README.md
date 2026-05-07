@@ -37,6 +37,10 @@ Hidden settings:
 - Set notification display target:
   - `defaults write com.grimridge.PingPlace notificationDisplayTarget -string mainDisplay`
   - `defaults write com.grimridge.PingPlace notificationDisplayTarget -string builtInDisplay`
+- Show the `Rerun Detection` menu item:
+  - `defaults write com.grimridge.PingPlace showRerunDetectionMenuItem -bool true`
+- Hide the `Rerun Detection` menu item:
+  - `defaults write com.grimridge.PingPlace showRerunDetectionMenuItem -bool false`
 
 ## Usage
 

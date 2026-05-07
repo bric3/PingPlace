@@ -3,6 +3,7 @@ import Foundation
 enum PingPlaceSettingsKey: String, CaseIterable {
     case isMenuBarIconHidden
     case debugMode
+    case showRerunDetectionMenuItem
     case notificationPosition
     case notificationDisplayTarget
 }
@@ -119,6 +120,7 @@ struct PingPlaceRuntimeConfiguration: Equatable {
 private struct PingPlaceSettingsPayload: Codable {
     var isMenuBarIconHidden: Bool?
     var debugMode: Bool?
+    var showRerunDetectionMenuItem: Bool?
     var notificationPosition: String?
     var notificationDisplayTarget: String?
 
@@ -128,6 +130,8 @@ private struct PingPlaceSettingsPayload: Codable {
             return isMenuBarIconHidden
         case .debugMode:
             return debugMode
+        case .showRerunDetectionMenuItem:
+            return showRerunDetectionMenuItem
         case .notificationPosition:
             return notificationPosition
         case .notificationDisplayTarget:
@@ -141,6 +145,8 @@ private struct PingPlaceSettingsPayload: Codable {
             isMenuBarIconHidden = value as? Bool
         case .debugMode:
             debugMode = value as? Bool
+        case .showRerunDetectionMenuItem:
+            showRerunDetectionMenuItem = value as? Bool
         case .notificationPosition:
             notificationPosition = value as? String
         case .notificationDisplayTarget:

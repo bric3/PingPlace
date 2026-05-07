@@ -263,6 +263,7 @@ private func testFileBackedSettingsPersistValues() throws {
     settings.set("deadCenter", forKey: .notificationPosition)
     settings.set("builtInDisplay", forKey: .notificationDisplayTarget)
     settings.set(true, forKey: .debugMode)
+    settings.set(true, forKey: .showRerunDetectionMenuItem)
 
     try assertEqual(
         settings.string(forKey: .notificationPosition),
@@ -278,6 +279,35 @@ private func testFileBackedSettingsPersistValues() throws {
         settings.object(forKey: .debugMode) as? Bool,
         true,
         "file-backed settings should persist debug mode"
+    )
+    try assertEqual(
+        settings.object(forKey: .showRerunDetectionMenuItem) as? Bool,
+        true,
+        "file-backed settings should persist the rerun-detection menu flag"
+    )
+}
+
+private func testMenuPolicyShowsRerunDetectionMenuItemWhenDebugBuild() throws {
+    try assertEqual(
+        PingPlaceMenuPolicy.showsRerunDetectionMenuItem(explicitFlag: false, isDebugBuild: true),
+        true,
+        "debug builds should always show the rerun-detection menu item"
+    )
+}
+
+private func testMenuPolicyShowsRerunDetectionMenuItemWhenExplicitlyEnabled() throws {
+    try assertEqual(
+        PingPlaceMenuPolicy.showsRerunDetectionMenuItem(explicitFlag: true, isDebugBuild: false),
+        true,
+        "the rerun-detection menu item should be shown when enabled by settings"
+    )
+}
+
+private func testMenuPolicyHidesRerunDetectionMenuItemByDefaultInReleaseBuilds() throws {
+    try assertEqual(
+        PingPlaceMenuPolicy.showsRerunDetectionMenuItem(explicitFlag: false, isDebugBuild: false),
+        false,
+        "release builds should hide the rerun-detection menu item by default"
     )
 }
 
@@ -946,6 +976,24 @@ private func testControllerSessionActivationSchedulesRetryWhenNoMoveOccurs() thr
         ["sessionDidBecomeActiveNotification", "sessionDidBecomeActiveNotification-retry1"],
         "session activation retry should use suffixed reason"
     )
+}
+
+private func testControllerManualDetectionRerunClearsCacheAndTriggersMove() throws {
+    let delegate = TestControllerDelegate()
+    delegate.moveResults = [true]
+    let scheduler = TestScheduler()
+    let controller = NotificationController(
+        delegate: delegate,
+        scheduler: scheduler,
+        recoveryRetryInterval: 0.5,
+        recoveryRetryLimit: 10
+    )
+
+    controller.handleManualDetectionRerun()
+
+    try assertEqual(delegate.clearCacheCallCount, 1, "manual rerun should clear cached geometry")
+    try assertEqual(delegate.moveReasons, ["manualDetectionRerun"], "manual rerun should trigger immediate move")
+    try assertEqual(scheduler.scheduledActions.count, 0, "manual rerun should not schedule retry after successful move")
 }
 
 private func testControllerWidgetCloseTriggersMoveWhenNotTopRight() throws {
@@ -1853,6 +1901,9 @@ struct NotificationBehaviorTestRunner {
             ("settings source uses explicit suite when provided", testSettingsSourceUsesExplicitSuiteWhenProvided),
             ("settings source uses environment file when provided", testSettingsSourceUsesEnvironmentFileWhenProvided),
             ("file-backed settings persist values", testFileBackedSettingsPersistValues),
+            ("menu policy shows rerun-detection item in debug builds", testMenuPolicyShowsRerunDetectionMenuItemWhenDebugBuild),
+            ("menu policy shows rerun-detection item when explicitly enabled", testMenuPolicyShowsRerunDetectionMenuItemWhenExplicitlyEnabled),
+            ("menu policy hides rerun-detection item by default in release builds", testMenuPolicyHidesRerunDetectionMenuItemByDefaultInReleaseBuilds),
             ("portable mac detection matches MacBook models", testPortableMacDetectionMatchesMacBookModels),
             ("portable mac detection rejects desktop models", testPortableMacDetectionRejectsDesktopModels),
             ("display target policy shows selector only when laptop display is available", testDisplayTargetPolicyShowsSelectorOnlyWhenLaptopDisplayIsAvailable),
@@ -1907,6 +1958,7 @@ struct NotificationBehaviorTestRunner {
             ("controller screen change schedules retry", testControllerScreenChangeSchedulesRetryWhenNoMoveOccurs),
             ("controller session activation clears cache and moves", testControllerSessionActivationClearsCacheAndTriggersMove),
             ("controller session activation schedules retry", testControllerSessionActivationSchedulesRetryWhenNoMoveOccurs),
+            ("controller manual detection rerun clears cache and moves", testControllerManualDetectionRerunClearsCacheAndTriggersMove),
             ("controller widget close triggers move", testControllerWidgetCloseTriggersMoveWhenNotTopRight),
             ("controller widget close schedules retry", testControllerWidgetCloseSchedulesRetryWhenNoMoveOccurs),
             ("controller widget close skips top-right", testControllerWidgetCloseDoesNotTriggerMoveWhenTopRight),

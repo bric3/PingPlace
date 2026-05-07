@@ -65,15 +65,18 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
     private lazy var settings = PingPlaceSettings(source: runtimeConfiguration.settingsSource)
     private lazy var isMenuBarIconHidden: Bool = settings.bool(forKey: .isMenuBarIconHidden)
     private let logger: Logger = .init(subsystem: "com.grimridge.PingPlace", category: "NotificationMover")
+    private let isDebugBuild: Bool = {
+        #if PINGPLACE_DEBUG_BUILD
+            true
+        #else
+            false
+        #endif
+    }()
     private lazy var debugMode: Bool = {
         if let explicitDebugMode = settings.object(forKey: .debugMode) as? Bool {
             return explicitDebugMode
         }
-        #if PINGPLACE_DEBUG_BUILD
-            return true
-        #else
-            return false
-        #endif
+        return isDebugBuild
     }()
     private lazy var fileDebugLogger: FileDebugLogger? = debugMode ? FileDebugLogger() : nil
     private let launchAgentPlistPath: String = NSHomeDirectory() + "/Library/LaunchAgents/com.grimridge.PingPlace.plist"
@@ -273,6 +276,16 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         positionPickerView = pickerView
         menu.addItem(positionPickerItem)
 
+        if launchMode != .menuPreview,
+           PingPlaceMenuPolicy.showsRerunDetectionMenuItem(
+               explicitFlag: settings.bool(forKey: .showRerunDetectionMenuItem),
+               isDebugBuild: isDebugBuild
+           )
+        {
+            menu.addItem(NSMenuItem.separator())
+            menu.addItem(NSMenuItem(title: "Rerun Detection", action: #selector(rerunDetection(_:)), keyEquivalent: ""))
+        }
+
         menu.addItem(NSMenuItem.separator())
 
         let launchItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
@@ -356,6 +369,10 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
         settings.set(true, forKey: .isMenuBarIconHidden)
         syncSettingsFileWatchState()
         statusItem = nil
+    }
+
+    @objc private func rerunDetection(_: NSMenuItem) {
+        controller.handleManualDetectionRerun()
     }
 
     @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {

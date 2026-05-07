@@ -93,6 +93,13 @@ final class NotificationController {
         triggerRecoveryReposition(reason: "sessionDidBecomeActiveNotification")
     }
 
+    func handleManualDetectionRerun() {
+        guard let delegate else { return }
+        delegate.debugLog("Manual detection rerun requested. \(delegate.screenTopologySummary())")
+        delegate.clearCachedNotificationGeometry()
+        triggerRecoveryReposition(reason: "manualDetectionRerun")
+    }
+
     func handleWidgetMonitorTick() {
         guard let delegate else { return }
 

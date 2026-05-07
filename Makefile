@@ -7,7 +7,7 @@ BUILD_INFO_SWIFT ?= .build/BuildInfo.generated.swift
 BUILD_DEPENDENCIES = bash swiftc lipo codesign git shasum awk find date
 SMOKE_TEST_DEPENDENCIES = bash open alerter grep awk ps kill tail wc head make
 APP_SWIFT_SOURCES = $(sort $(wildcard src/*.swift)) $(BUILD_INFO_SWIFT)
-TEST_SWIFT_SOURCES = src/MachineModelPolicy.swift src/NotificationDisplayTarget.swift src/NotificationDisplayTargetPolicy.swift src/PingPlaceLaunchMode.swift src/PingPlaceMenuPreviewIPC.swift src/PingPlaceSettings.swift src/NotificationPosition.swift src/NotificationPositionGridLayout.swift src/NotificationGeometry.swift src/NotificationPolicyTypes.swift src/NotificationMovePolicy.swift src/NotificationCenterStatePolicy.swift src/ScreenResolutionPolicy.swift src/TreeTraversal.swift src/NotificationController.swift src/NotificationWindowPlacementEngine.swift tests/NotificationBehaviorTests.swift tests/NotificationPositionPickerTests.swift
+TEST_SWIFT_SOURCES = src/MachineModelPolicy.swift src/NotificationDisplayTarget.swift src/NotificationDisplayTargetPolicy.swift src/PingPlaceLaunchMode.swift src/PingPlaceMenuPolicy.swift src/PingPlaceMenuPreviewIPC.swift src/PingPlaceSettings.swift src/NotificationPosition.swift src/NotificationPositionGridLayout.swift src/NotificationGeometry.swift src/NotificationPolicyTypes.swift src/NotificationMovePolicy.swift src/NotificationCenterStatePolicy.swift src/ScreenResolutionPolicy.swift src/TreeTraversal.swift src/NotificationController.swift src/NotificationWindowPlacementEngine.swift tests/NotificationBehaviorTests.swift tests/NotificationPositionPickerTests.swift
 
 ifneq ("$(wildcard $(CODESIGN_IDENTITY_FILE))","")
 CODESIGN_IDENTITY ?= $(shell cat $(CODESIGN_IDENTITY_FILE))

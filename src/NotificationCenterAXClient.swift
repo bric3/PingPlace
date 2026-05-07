@@ -11,6 +11,19 @@ enum NotificationCenterAXTraversalPolicy {
         "AXSelectedChildren",
         "AXTabs",
     ]
+
+    static let ignoredFallbackAttributes: Set<String> = [
+        kAXParentAttribute as String,
+        kAXWindowAttribute as String,
+        kAXTopLevelUIElementAttribute as String,
+        kAXFocusedApplicationAttribute as String,
+        kAXFocusedWindowAttribute as String,
+        kAXTitleUIElementAttribute as String,
+    ]
+
+    static func shouldInspectFallbackAttribute(_ attribute: String) -> Bool {
+        !descendantAttributes.contains(attribute) && !ignoredFallbackAttributes.contains(attribute)
+    }
 }
 
 protocol NotificationCenterAXClient {
@@ -96,15 +109,18 @@ struct SystemNotificationCenterAXClient: NotificationCenterAXClient {
     }
 
     func firstElement(root: AXUIElement, targetSubroles: [String]) -> AXUIElement? {
-        TreeTraversal.firstMatchingNode(
+        if let preferredMatch = firstMatchingElement(
             roots: [root],
-            childProvider: { children(of: $0) },
-            matches: { element in
-                guard let subrole = subrole(of: element) else {
-                    return false
-                }
-                return targetSubroles.contains(subrole)
-            }
+            childProvider: { preferredChildren(of: $0) },
+            targetSubroles: targetSubroles
+        ) {
+            return preferredMatch
+        }
+
+        return firstMatchingElement(
+            roots: [root],
+            childProvider: { fallbackChildren(of: $0) },
+            targetSubroles: targetSubroles
         )
     }
 
@@ -147,7 +163,7 @@ struct SystemNotificationCenterAXClient: NotificationCenterAXClient {
         let axApp = AXUIElementCreateApplication(pid)
         return TreeTraversal.firstMatchingNode(
             roots: [axApp],
-            childProvider: { children(of: $0) },
+            childProvider: { fallbackChildren(of: $0) },
             matches: { element in
                 guard let identifier = windowIdentifier(element) else {
                     return false
@@ -173,11 +189,43 @@ struct SystemNotificationCenterAXClient: NotificationCenterAXClient {
         return subroleRef as? String
     }
 
-    private func children(of element: AXUIElement) -> [AXUIElement] {
+    private func firstMatchingElement(
+        roots: [AXUIElement],
+        childProvider: (AXUIElement) -> [AXUIElement],
+        targetSubroles: [String]
+    ) -> AXUIElement? {
+        TreeTraversal.firstMatchingNode(
+            roots: roots,
+            childProvider: childProvider,
+            matches: { element in
+                guard let subrole = subrole(of: element) else {
+                    return false
+                }
+                return targetSubroles.contains(subrole)
+            }
+        )
+    }
+
+    private func preferredChildren(of element: AXUIElement) -> [AXUIElement] {
         var combined: [AXUIElement] = []
         var seen: Set<AXUIElement> = []
 
         for attribute in NotificationCenterAXTraversalPolicy.descendantAttributes {
+            for child in attributeElements(of: element, attribute: attribute) where seen.insert(child).inserted {
+                combined.append(child)
+            }
+        }
+
+        return combined
+    }
+
+    private func fallbackChildren(of element: AXUIElement) -> [AXUIElement] {
+        var combined = preferredChildren(of: element)
+        var seen = Set(combined)
+
+        for attribute in attributeNames(of: element)
+            where NotificationCenterAXTraversalPolicy.shouldInspectFallbackAttribute(attribute)
+        {
             for child in attributeElements(of: element, attribute: attribute) where seen.insert(child).inserted {
                 combined.append(child)
             }
@@ -203,5 +251,15 @@ struct SystemNotificationCenterAXClient: NotificationCenterAXClient {
         }
 
         return []
+    }
+
+    private func attributeNames(of element: AXUIElement) -> [String] {
+        var attributeNamesRef: CFArray?
+        guard AXUIElementCopyAttributeNames(element, &attributeNamesRef) == .success,
+              let attributeNamesRef,
+              let attributeNames = attributeNamesRef as? [String] else {
+            return []
+        }
+        return attributeNames
     }
 }
