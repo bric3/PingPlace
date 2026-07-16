@@ -4,6 +4,7 @@ struct NotificationWindowSnapshot {
     let identifier: String?
     let focused: Bool
     let isNotificationCenterPanelOpen: Bool
+    let hasWidgetDescendant: Bool
     let notificationSubrole: String?
     let rootWindowPosition: CGPoint
     let windowSize: CGSize
@@ -14,6 +15,7 @@ struct NotificationWindowSnapshot {
         identifier: String?,
         focused: Bool,
         isNotificationCenterPanelOpen: Bool,
+        hasWidgetDescendant: Bool = false,
         notificationSubrole: String?,
         rootWindowPosition: CGPoint = .zero,
         windowSize: CGSize,
@@ -23,6 +25,7 @@ struct NotificationWindowSnapshot {
         self.identifier = identifier
         self.focused = focused
         self.isNotificationCenterPanelOpen = isNotificationCenterPanelOpen
+        self.hasWidgetDescendant = hasWidgetDescendant
         self.notificationSubrole = notificationSubrole
         self.rootWindowPosition = rootWindowPosition
         self.windowSize = windowSize
@@ -78,6 +81,7 @@ final class NotificationWindowPlacementEngine {
             identifier: snapshot.identifier,
             focused: snapshot.focused,
             isNotificationCenterPanelOpen: snapshot.isNotificationCenterPanelOpen,
+            hasWidgetDescendant: snapshot.hasWidgetDescendant,
             notificationSubrole: snapshot.notificationSubrole
         )
         guard decision == .move else {

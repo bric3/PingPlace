@@ -40,6 +40,7 @@ protocol NotificationCenterAXClient {
     func hasSystemWideFocusedWindow(pid: pid_t) -> Bool
     func hasFocusedWindow(pid: pid_t) -> Bool
     func hasWidgetUI(pid: pid_t) -> Bool
+    func hasWidgetDescendant(root: AXUIElement) -> Bool
     func role(of element: AXUIElement) -> String?
     func subrole(of element: AXUIElement) -> String?
 }
@@ -161,8 +162,16 @@ struct SystemNotificationCenterAXClient: NotificationCenterAXClient {
 
     func hasWidgetUI(pid: pid_t) -> Bool {
         let axApp = AXUIElementCreateApplication(pid)
+        return hasWidgetIdentifier(roots: [axApp])
+    }
+
+    func hasWidgetDescendant(root: AXUIElement) -> Bool {
+        hasWidgetIdentifier(roots: [root])
+    }
+
+    private func hasWidgetIdentifier(roots: [AXUIElement]) -> Bool {
         return TreeTraversal.firstMatchingNode(
-            roots: [axApp],
+            roots: roots,
             childProvider: { fallbackChildren(of: $0) },
             matches: { element in
                 guard let identifier = windowIdentifier(element) else {

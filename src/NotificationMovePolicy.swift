@@ -24,11 +24,15 @@ enum NotificationMovePolicy {
         identifier: String?,
         focused: Bool,
         isNotificationCenterPanelOpen: Bool,
+        hasWidgetDescendant: Bool = false,
         notificationSubrole: String?
     ) -> NotificationMoveDecision {
         if isNotificationCenterPanelOpen,
            shouldSkipForPanelOpen(notificationSubrole: notificationSubrole) {
             return .skipPanelOpen
+        }
+        if hasWidgetDescendant {
+            return .skipWidget
         }
         if let identifier, identifier.hasPrefix("widget") {
             return .skipWidget

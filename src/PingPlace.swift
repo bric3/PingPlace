@@ -487,6 +487,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
 
         let windowIdentifier = axClient.windowIdentifier(window)
         let focusedWindow = axClient.isFocused(window)
+        let hasWidgetDescendant = axClient.hasWidgetDescendant(root: window)
         let windowSize = axClient.size(of: window)
         let windowPosition = axClient.position(of: window)
         let bannerContainer = axClient.firstElement(root: window, targetSubroles: bannerSubroles)
@@ -533,6 +534,7 @@ class NotificationMover: NSObject, NSApplicationDelegate, NSWindowDelegate, Noti
             identifier: cacheIdentifier,
             focused: focusedWindow,
             isNotificationCenterPanelOpen: hasNotificationCenterUI(),
+            hasWidgetDescendant: hasWidgetDescendant,
             notificationSubrole: bannerSubrole,
             rootWindowPosition: windowPosition ?? .zero,
             windowSize: resolvedWindowSize,

@@ -544,6 +544,17 @@ private func testMoveDecisionSkipsWidgetWindows() throws {
     try assertEqual(result, .skipWidget, "widget windows should be skipped")
 }
 
+private func testMoveDecisionSkipsWidgetDescendantWindows() throws {
+    let result = NotificationMovePolicy.moveDecision(
+        identifier: "notification-banner",
+        focused: false,
+        isNotificationCenterPanelOpen: false,
+        hasWidgetDescendant: true,
+        notificationSubrole: "AXNotificationCenterBanner"
+    )
+    try assertEqual(result, .skipWidget, "windows containing widget descendants should be skipped")
+}
+
 private func testMoveDecisionSkipsFocusedWindows() throws {
     let result = NotificationMovePolicy.moveDecision(
         identifier: "notification-banner",
@@ -1680,6 +1691,30 @@ private func testPlacementEngineSkipsWidgetWindow() throws {
     try assertEqual(decision, .skipWidget, "placement engine widget skip decision")
 }
 
+private func testPlacementEngineSkipsWidgetDescendantWindow() throws {
+    let engine = NotificationWindowPlacementEngine(paddingAboveDock: 30)
+    let evaluation = engine.evaluateMove(
+        snapshot: NotificationWindowSnapshot(
+            identifier: "notification-banner",
+            focused: false,
+            isNotificationCenterPanelOpen: false,
+            hasWidgetDescendant: true,
+            notificationSubrole: "AXNotificationCenterBanner",
+            windowSize: CGSize(width: 3360, height: 1890),
+            notificationSize: CGSize(width: 344, height: 73),
+            notificationPosition: CGPoint(x: 3376, y: 46)
+        ),
+        currentPosition: .deadCenter,
+        screens: dualScreenLayout
+    )
+
+    guard case let .skip(decision) = evaluation else {
+        throw TestFailure.assertionFailed("placement engine should skip windows containing widget descendants")
+    }
+
+    try assertEqual(decision, .skipWidget, "placement engine widget-descendant skip decision")
+}
+
 private func testPlacementEngineClearCacheRemovesCachedState() throws {
     let engine = NotificationWindowPlacementEngine(paddingAboveDock: 30)
     _ = engine.evaluateMove(
@@ -1926,6 +1961,7 @@ struct NotificationBehaviorTestRunner {
             ("grid layout uses screen-like aspect ratio", testGridLayoutUsesScreenLikeAspectRatio),
             ("grid layout uses MacBook main display aspect ratio", testGridLayoutUsesMacBookMainDisplayAspectRatio),
             ("move decision skips widget windows", testMoveDecisionSkipsWidgetWindows),
+            ("move decision skips widget descendant windows", testMoveDecisionSkipsWidgetDescendantWindows),
             ("move decision skips focused windows", testMoveDecisionSkipsFocusedWindows),
             ("move decision allows regular banners", testMoveDecisionAllowsRegularBanners),
             ("move decision skips while panel is open", testMoveDecisionSkipsWhenNotificationCenterPanelIsOpen),
@@ -1983,6 +2019,7 @@ struct NotificationBehaviorTestRunner {
             ("placement engine rebases root window when switching from main to built-in display", testPlacementEngineRebasesRootWindowWhenSwitchingFromMainToBuiltInDisplay),
             ("placement engine skips focused window", testPlacementEngineSkipsFocusedWindow),
             ("placement engine skips widget window", testPlacementEngineSkipsWidgetWindow),
+            ("placement engine skips widget descendant window", testPlacementEngineSkipsWidgetDescendantWindow),
             ("placement engine clear cache removes state", testPlacementEngineClearCacheRemovesCachedState),
             ("placement engine skips while panel is open", testPlacementEngineSkipsWhenPanelIsOpen),
             ("placement engine allows alerts while panel is open", testPlacementEngineAllowsAlertsWhenPanelIsOpen),
