@@ -27,6 +27,21 @@ make test
 
 The GitHub Actions workflow runs the same command on pull requests and on pushes to `master`.
 
+Run smoke tests with:
+
+```bash
+make smoke-test
+```
+
+> [!NOTE]
+> [`alerter`](https://github.com/vjeantet/alerter) must be installed before.
+>
+> ```shell
+> brew install vjeantet/tap/alerter
+> ```
+>
+> `alerter` is chosen over `terminal-notifier` because it's a native swift app that do not require `ruby`.
+
 ## Debug build and logs
 
 To diagnose notification placement issues, especially around wake, login, and screen topology changes, use the debug build:
